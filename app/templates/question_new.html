@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/questions">Quay lại ngân hàng câu hỏi</a>
+
+<section class="panel">
+  <p class="eyebrow">Thêm vào ngân hàng</p>
+  <h1>Tạo câu hỏi mới</h1>
+  <p class="form-help">Câu hỏi sẽ được thêm vào ngân hàng và có thể sử dụng khi tạo bộ đề.</p>
+
+  <form id="question-form" class="question-form">
+    <label class="full-width">Nội dung câu hỏi
+      <textarea name="stem" rows="4" required minlength="10" placeholder="Nhập nội dung câu hỏi..."></textarea>
+    </label>
+
+    <div class="option-fields">
+      <label>Phương án A<input name="optionA" required></label>
+      <label>Phương án B<input name="optionB" required></label>
+      <label>Phương án C<input name="optionC" required></label>
+      <label>Phương án D<input name="optionD" required></label>
+    </div>
+
+    <div class="form-grid">
+      <label>Đáp án đúng
+        <select name="correctAnswer" required>
+          <option value="A">A</option><option value="B">B</option>
+          <option value="C">C</option><option value="D">D</option>
+        </select>
+      </label>
+      <label>Độ khó
+        <select name="difficulty">
+          <option value="basic">Cơ bản</option>
+          <option value="intermediate">Trung bình</option>
+          <option value="advanced">Nâng cao</option>
+        </select>
+      </label>
+      <label>Chủ đề<input name="topic" placeholder="Ví dụ: Kiểm soát nhiễm khuẩn"></label>
+      <label>Nguồn tài liệu<input name="sourceDocument" placeholder="Tên tài liệu hoặc giáo trình"></label>
+    </div>
+
+    <label class="full-width">Giải thích đáp án
+      <textarea name="explanation" rows="3" placeholder="Giải thích vì sao đáp án đúng..."></textarea>
+    </label>
+
+    <div class="form-actions">
+      <button id="submit-button" type="submit">Lưu câu hỏi</button>
+      <a class="button secondary" href="/questions">Hủy</a>
+    </div>
+  </form>
+</section>
+
+<script>
+const questionForm = document.getElementById('question-form');
+const submitButton = document.getElementById('submit-button');
+questionForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  submitButton.disabled = true;
+  submitButton.textContent = 'Đang lưu...';
+
+  const data = new FormData(questionForm);
+  const payload = Object.fromEntries(data.entries());
+  payload.language = 'vi';
+  payload.questionType = 'ORIGINAL';
+  payload.status = 'APPROVED';
+
+  try {
+    const response = await fetch('/questions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      location.href = '/questions/' + result.data.id;
+      return;
+    }
+
+    alert(result.error.message);
+  } catch (error) {
+    alert('Không thể kết nối đến máy chủ. Vui lòng thử lại.');
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = 'Lưu câu hỏi';
+  }
+});
+</script>
+{% endblock %}

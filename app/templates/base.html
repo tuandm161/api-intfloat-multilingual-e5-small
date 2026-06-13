@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} | Demo diễn đạt lại câu hỏi</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/questions">Demo diễn đạt lại câu hỏi</a>
+      <nav aria-label="Điều hướng chính">
+        <a href="/questions" {% if active_page == 'questions' %}aria-current="page"{% endif %}>Ngân hàng câu hỏi</a>
+        <a href="/exams" {% if active_page == 'exams' %}aria-current="page"{% endif %}>Bộ đề</a>
+        <a href="/paraphrase-jobs" {% if active_page == 'jobs' %}aria-current="page"{% endif %}>Lịch sử diễn đạt lại</a>
+        <a href="/demo-guide" {% if active_page == 'guide' %}aria-current="page"{% endif %}>Hướng dẫn demo</a>
+      </nav>
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

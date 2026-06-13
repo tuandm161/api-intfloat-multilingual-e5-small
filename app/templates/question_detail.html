@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/questions">Quay lại ngân hàng câu hỏi</a>
+<section class="panel question-card">
+  <div class="row"><div><p class="eyebrow">{{ question.id }}</p><h1>{{ question.stem }}</h1></div><span class="badge {{ question.status|lower }}">{{ question.status|vi_label }}</span></div>
+  <div class="options">
+    {% for key, value in question.options.items() %}<div class="option {% if key == question.correctAnswer %}correct{% endif %}"><strong>{{ key }}.</strong> {{ value }}</div>{% endfor %}
+  </div>
+  <p><strong>Giải thích:</strong> {{ question.explanation or 'Chưa có giải thích' }}</p>
+  <div class="metadata"><span>{{ question.topic }}</span><span>{{ question.difficulty|vi_label }}</span><span>{{ question.language|vi_label }}</span></div>
+</section>
+{% if question.questionType == 'ORIGINAL' %}
+<section class="panel">
+  <h2>Tạo câu diễn đạt lại</h2>
+  <form id="generate-form" class="action-form">
+    <label>Số lượng <select name="requestedCount"><option>3</option><option selected>5</option><option>10</option></select></label>
+    <label>Mức độ thay đổi <select name="changeStrength"><option value="light">Nhẹ</option><option value="medium" selected>Vừa</option><option value="strong">Mạnh</option></select></label>
+    <button class="button" type="submit">Tạo câu diễn đạt lại</button>
+  </form>
+</section>
+{% endif %}
+<section class="panel"><h2>Các câu diễn đạt lại đã duyệt</h2>
+  <ul class="clean-list">{% for child in paraphrases %}<li><a href="/questions/{{ child.id }}">{{ child.id }}</a>: {{ child.stem }}</li>{% else %}<li>Chưa có câu diễn đạt lại nào được lưu.</li>{% endfor %}</ul>
+</section>
+<script>
+const form = document.getElementById('generate-form');
+if (form) form.addEventListener('submit', async (event) => {
+  event.preventDefault(); const data = new FormData(form);
+  const response = await fetch('/paraphrase-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sourceQuestionId:'{{ question.id }}', mode:'STEM_ONLY', requestedCount:Number(data.get('requestedCount')), targetLanguage:'{{ question.language }}', changeStrength:data.get('changeStrength'), provider:'mock'})});
+  const payload = await response.json(); if (payload.success) location.href='/paraphrase-jobs/'+payload.data.jobId; else alert(payload.error.message);
+});
+</script>
+{% endblock %}

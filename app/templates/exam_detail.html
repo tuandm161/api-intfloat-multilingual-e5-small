@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/exams">Quay lại danh sách bộ đề</a>
+<section class="panel">
+  <p class="eyebrow">{{ exam.id }}</p>
+  <h1>{{ exam.title }}</h1>
+  <p>{{ exam.description or 'Chưa có mô tả.' }}</p>
+  <div class="metadata"><span>{{ exam.questionCount }} câu hỏi</span></div>
+</section>
+
+<div id="exam-duplicate-result" class="duplicate-result" role="alert" hidden>
+  <h2>Không thể thêm vì trùng ngữ nghĩa</h2>
+  <p id="exam-duplicate-message"></p>
+  <dl class="duplicate-details">
+    <div><dt>Câu đang có trong đề</dt><dd><a id="exam-duplicate-link"></a></dd></div>
+    <div><dt>Điểm tương đồng</dt><dd id="exam-duplicate-score"></dd></div>
+    <div><dt>Nội dung</dt><dd id="exam-duplicate-stem"></dd></div>
+  </dl>
+</div>
+
+<section class="panel exam-section">
+  <h2>Câu hỏi trong bộ đề</h2>
+  <ol class="exam-question-list">
+  {% for question in exam.questions %}
+    <li>
+      <div><a href="/questions/{{ question.id }}"><strong>{{ question.id }}</strong></a> — {{ question.stem }}</div>
+      <button class="danger compact" onclick="removeQuestion('{{ question.id }}')">Xóa khỏi đề</button>
+    </li>
+  {% else %}
+    <li class="empty-item">Bộ đề chưa có câu hỏi.</li>
+  {% endfor %}
+  </ol>
+</section>
+
+<section class="panel exam-section">
+  <h2>Thêm câu từ ngân hàng</h2>
+  <p class="form-help">Mỗi câu được kiểm tra ngữ nghĩa bằng multilingual E5 với các câu đã có trong bộ đề.</p>
+  <div class="question-picker">
+  {% for question in available_questions %}
+    <article class="picker-item">
+      <div>
+        <p class="eyebrow">{{ question.id }} · {{ question.topic or 'Chưa phân loại' }}</p>
+        <p>{{ question.stem }}</p>
+      </div>
+      <button onclick="addQuestion('{{ question.id }}')">Thêm vào đề</button>
+    </article>
+  {% else %}
+    <p>Không còn câu hỏi nào để thêm.</p>
+  {% endfor %}
+  </div>
+</section>
+
+<script>
+const duplicateBox = document.getElementById('exam-duplicate-result');
+
+async function api(url, options={}) {
+  const response = await fetch(url, {
+    headers: {'Content-Type': 'application/json', ...(options.headers || {})}, ...options
+  });
+  const payload = await response.json();
+  if (!payload.success) {
+    const error = new Error(payload.error.message);
+    error.code = payload.error.code;
+    error.details = payload.error.details || {};
+    throw error;
+  }
+  return payload.data;
+}
+
+async function addQuestion(questionId) {
+  duplicateBox.hidden = true;
+  try {
+    await api('/exams/{{ exam.id }}/questions', {
+      method: 'POST', body: JSON.stringify({questionId})
+    });
+    location.reload();
+  } catch (error) {
+    if (error.code === 'DUPLICATE_RESOURCE' && error.details.duplicateQuestionId) {
+      document.getElementById('exam-duplicate-message').textContent = error.message;
+      const link = document.getElementById('exam-duplicate-link');
+      link.textContent = error.details.duplicateQuestionId;
+      link.href = '/questions/' + encodeURIComponent(error.details.duplicateQuestionId);
+      document.getElementById('exam-duplicate-score').textContent =
+        (Number(error.details.similarity) * 100).toFixed(2) + '%';
+      document.getElementById('exam-duplicate-stem').textContent = error.details.duplicateQuestionStem;
+      duplicateBox.hidden = false;
+      duplicateBox.scrollIntoView({behavior: 'smooth', block: 'center'});
+    } else {
+      alert(error.message);
+    }
+  }
+}
+
+async function removeQuestion(questionId) {
+  try {
+    await api('/exams/{{ exam.id }}/questions/' + encodeURIComponent(questionId), {method: 'DELETE'});
+    location.reload();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+</script>
+{% endblock %}

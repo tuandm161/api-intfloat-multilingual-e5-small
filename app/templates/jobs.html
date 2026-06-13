@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Lịch sử tạo câu</p><h1>Các phiên diễn đạt lại</h1></div></section>
+<section class="table-card"><table><thead><tr><th>Phiên</th><th>Câu nguồn</th><th>Nhà cung cấp</th><th>Trạng thái</th><th>Số lượng yêu cầu</th></tr></thead><tbody>
+{% for job in items %}<tr><td><a href="/paraphrase-jobs/{{ job.id }}">{{ job.id }}</a></td><td><a href="/questions/{{ job.sourceQuestionId }}">{{ job.sourceQuestionId }}</a></td><td>{{ job.provider|vi_label }}</td><td><span class="badge">{{ job.status|vi_label }}</span></td><td>{{ job.requestedCount }}</td></tr>
+{% else %}<tr><td colspan="5">Chưa có phiên diễn đạt lại nào.</td></tr>{% endfor %}
+</tbody></table></section>
+{% endblock %}

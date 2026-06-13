@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Ngân hàng câu hỏi</p><h1>Câu hỏi y khoa và điều dưỡng</h1></div>
+  <div class="actions">
+    <a class="button" href="/questions/new">Tạo câu hỏi mới</a>
+    <a class="button secondary" href="/exports/questions.csv">Xuất CSV</a>
+  </div>
+</section>
+<form class="filters" method="get">
+  <input name="search" placeholder="Tìm theo nội dung hoặc chủ đề">
+  <select name="status"><option value="">Tất cả trạng thái</option><option value="APPROVED">Đã duyệt</option><option value="DRAFT">Bản nháp</option></select>
+  <select name="questionType"><option value="">Tất cả loại câu hỏi</option><option value="ORIGINAL">Câu gốc</option><option value="PARAPHRASE">Câu diễn đạt lại</option></select>
+  <button class="button" type="submit">Lọc</button>
+</form>
+<section class="table-card">
+  <table>
+    <thead><tr><th>Mã</th><th>Nội dung câu hỏi</th><th>Chủ đề</th><th>Độ khó</th><th>Loại</th><th>Trạng thái</th><th>Số câu diễn đạt lại</th></tr></thead>
+    <tbody>
+    {% for question in items %}
+      <tr>
+        <td><a href="/questions/{{ question.id }}">{{ question.id }}</a></td>
+        <td>{{ question.stem }}</td><td>{{ question.topic or '-' }}</td><td>{{ question.difficulty|vi_label }}</td>
+        <td><span class="badge">{{ question.questionType|vi_label }}</span></td><td><span class="badge {{ question.status|lower }}">{{ question.status|vi_label }}</span></td><td>{{ question.paraphraseCount }}</td>
+      </tr>
+    {% else %}<tr><td colspan="7">Không tìm thấy câu hỏi nào.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

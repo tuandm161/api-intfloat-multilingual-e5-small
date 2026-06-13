@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel"><p class="eyebrow">Hướng dẫn demo</p><h1>Quy trình đánh giá từ đầu đến cuối</h1>
+<ol class="demo-steps">
+  <li>Mở <a href="/questions">Ngân hàng câu hỏi</a>.</li><li>Chọn <a href="/questions/Q001">câu Q001 về ABC</a>.</li><li>Nhấn <strong>Tạo câu diễn đạt lại</strong>, chọn 5 câu và mức thay đổi vừa.</li><li>Ở trang phiên xử lý, nhấn <strong>Kiểm định các câu</strong>.</li><li>So sánh các nhãn Đạt, Cần xem xét và Đã từ chối với điểm số và cảnh báo tương ứng.</li><li>Chỉnh sửa hoặc từ chối một câu có cảnh báo.</li><li>Duyệt một câu phù hợp và lưu thành câu hỏi.</li><li>Quay lại Q001 và xác nhận câu diễn đạt lại đã xuất hiện.</li><li><a href="/exports/questions.csv">Xuất ngân hàng câu hỏi đã duyệt</a>.</li>
+</ol></section>
+{% endblock %}

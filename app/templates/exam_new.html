@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/exams">Quay lại danh sách bộ đề</a>
+<section class="panel">
+  <p class="eyebrow">Quản lý đề</p>
+  <h1>Tạo bộ đề mới</h1>
+  <form id="exam-form" class="question-form">
+    <label>Tên bộ đề
+      <input name="title" required placeholder="Ví dụ: Đề kiểm tra điều dưỡng cơ bản">
+    </label>
+    <label>Mô tả
+      <textarea name="description" rows="3" placeholder="Mục đích hoặc nội dung của bộ đề"></textarea>
+    </label>
+    <div class="form-actions">
+      <button id="create-exam-button" type="submit">Tạo bộ đề</button>
+      <a class="button secondary" href="/exams">Hủy</a>
+    </div>
+  </form>
+</section>
+<script>
+const examForm = document.getElementById('exam-form');
+const createExamButton = document.getElementById('create-exam-button');
+examForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  createExamButton.disabled = true;
+  createExamButton.textContent = 'Đang tạo...';
+  const data = Object.fromEntries(new FormData(examForm).entries());
+  try {
+    const response = await fetch('/exams', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    if (!result.success) throw new Error(result.error.message);
+    location.href = '/exams/' + result.data.id;
+  } catch (error) {
+    alert(error.message);
+    createExamButton.disabled = false;
+    createExamButton.textContent = 'Tạo bộ đề';
+  }
+});
+</script>
+{% endblock %}

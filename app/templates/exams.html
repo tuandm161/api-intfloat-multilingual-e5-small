@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Quản lý đề</p><h1>Các bộ đề</h1></div>
+  <a class="button" href="/exams/new">Tạo bộ đề mới</a>
+</section>
+
+<section class="table-card">
+  <table>
+    <thead><tr><th>Mã đề</th><th>Tên bộ đề</th><th>Mô tả</th><th>Số câu</th></tr></thead>
+    <tbody>
+    {% for exam in items %}
+      <tr>
+        <td><a href="/exams/{{ exam.id }}">{{ exam.id }}</a></td>
+        <td>{{ exam.title }}</td>
+        <td>{{ exam.description or '-' }}</td>
+        <td>{{ exam.questionCount }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">Chưa có bộ đề nào.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
