@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 os.environ["EMBEDDING_PROVIDER"] = "mock_deterministic"
+os.environ["GENERATION_API_KEY"] = ""
 
 from app.main import app
 

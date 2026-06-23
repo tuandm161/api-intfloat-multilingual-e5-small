@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/documents/{{ job.documentId }}">Quay lại tài liệu</a>
+<section class="panel">
+  <p class="eyebrow">{{ job.id }}</p>
+  <h1>Duyệt câu hỏi từ tài liệu</h1>
+  <div class="metadata"><span>{{ job.status|vi_label }}</span><span>{{ job.candidateCount }} câu đề xuất</span><span>{{ job.model or '-' }}</span></div>
+  {% if job.errorMessage %}<p class="error-box">{{ job.errorMessage }}</p>{% endif %}
+</section>
+<section class="candidate-grid">
+{% for candidate in job.candidates %}
+  <article class="panel candidate-card" id="{{ candidate.id }}">
+    <div class="row"><span class="badge label-{{ (candidate.label or 'pending')|lower }}">{{ candidate.label|vi_label if candidate.label else 'Chưa đánh giá' }}</span><span class="badge">{{ candidate.status|vi_label }}</span></div>
+    <label>Câu hỏi<textarea rows="3" class="candidate-stem">{{ candidate.stem }}</textarea></label>
+    <div class="option-fields">
+      <label>A<input class="option-a" value="{{ candidate.options.A }}"></label>
+      <label>B<input class="option-b" value="{{ candidate.options.B }}"></label>
+      <label>C<input class="option-c" value="{{ candidate.options.C }}"></label>
+      <label>D<input class="option-d" value="{{ candidate.options.D }}"></label>
+    </div>
+    <div class="form-grid">
+      <label>Đáp án đúng<select class="correct-answer">{% for key in ['A','B','C','D'] %}<option value="{{ key }}" {% if candidate.correctAnswer == key %}selected{% endif %}>{{ key }}</option>{% endfor %}</select></label>
+      <label>Độ khó<input class="difficulty" value="{{ candidate.difficulty or '' }}"></label>
+      <label>Chủ đề<input class="topic" value="{{ candidate.topic or '' }}"></label>
+      <label class="full-width">Giải thích<textarea rows="2" class="explanation">{{ candidate.explanation or '' }}</textarea></label>
+      <label class="full-width">Trích dẫn nguồn<textarea rows="2" class="source-excerpt">{{ candidate.sourceExcerpt or '' }}</textarea></label>
+    </div>
+    {% if candidate.duplicateQuestionId %}<p class="duplicate-result">Nghi trùng với {{ candidate.duplicateQuestionId }} - {{ '%.2f'|format((candidate.duplicateMaxSimilarity or 0) * 100) }}%</p>{% endif %}
+    <ul class="warnings">{% for warning in candidate.warnings %}<li>{{ warning|vi_warning }}</li>{% else %}<li>Không có cảnh báo.</li>{% endfor %}</ul>
+    <div class="actions">
+      <button onclick="editDocumentCandidate('{{ candidate.id }}')" {% if candidate.status == 'SAVED' %}disabled{% endif %}>Lưu chỉnh sửa</button>
+      <button onclick="reviewDocumentCandidate('{{ candidate.id }}','approve')" {% if not candidate.label or candidate.status in ['REJECTED', 'SAVED', 'APPROVED'] %}disabled{% endif %}>Duyệt</button>
+      <button class="danger" onclick="reviewDocumentCandidate('{{ candidate.id }}','reject')" {% if candidate.status == 'SAVED' %}disabled{% endif %}>Từ chối</button>
+      <button onclick="saveDocumentCandidate('{{ candidate.id }}')" {% if candidate.status != 'APPROVED' %}disabled{% endif %}>Lưu vào bank</button>
+    </div>
+  </article>
+{% else %}
+  <article class="panel">Chưa có câu hỏi đề xuất.</article>
+{% endfor %}
+</section>
+<script>
+async function api(url, options={}) {
+  const response = await fetch(url, {headers: {'Content-Type': 'application/json', ...(options.headers || {})}, ...options});
+  const payload = await response.json();
+  if (!payload.success) throw new Error(payload.error.message);
+  return payload.data;
+}
+function candidatePayload(id) {
+  const root = document.getElementById(id);
+  return {
+    stem: root.querySelector('.candidate-stem').value,
+    optionA: root.querySelector('.option-a').value,
+    optionB: root.querySelector('.option-b').value,
+    optionC: root.querySelector('.option-c').value,
+    optionD: root.querySelector('.option-d').value,
+    correctAnswer: root.querySelector('.correct-answer').value,
+    difficulty: root.querySelector('.difficulty').value,
+    topic: root.querySelector('.topic').value,
+    explanation: root.querySelector('.explanation').value,
+    sourceExcerpt: root.querySelector('.source-excerpt').value
+  };
+}
+async function editDocumentCandidate(id) { try { await api('/document-question-candidates/' + id, {method:'PUT', body:JSON.stringify(candidatePayload(id))}); location.reload(); } catch (e) { alert(e.message); } }
+async function reviewDocumentCandidate(id, action) { const notes = prompt('Nhận xét của người duyệt (không bắt buộc)') || ''; try { await api('/document-question-candidates/' + id + '/' + action, {method:'POST', body:JSON.stringify({reviewerNotes: notes})}); location.reload(); } catch (e) { alert(e.message); } }
+async function saveDocumentCandidate(id) { try { const data = await api('/document-question-candidates/' + id + '/save-as-question', {method:'POST'}); location.href = '/questions/' + data.newQuestionId; } catch (e) { alert(e.message); } }
+</script>
+{% endblock %}

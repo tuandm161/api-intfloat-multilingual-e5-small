@@ -87,12 +87,12 @@ def test_audit_export_and_reset_are_repeatable(client: TestClient) -> None:
     assert any(item["action"] == "PARAPHRASE_CANDIDATE_VALIDATED" for item in logs["items"])
     json_export = client.get("/exports/questions.json").json()["data"]
     csv_export = client.get("/exports/questions.csv")
-    assert json_export["count"] == 8
+    assert json_export["count"] == 108
     assert csv_export.status_code == 200
     assert csv_export.content.startswith(b"\xef\xbb\xbf")
     reset = client.post("/demo/reset").json()["data"]
-    assert reset["seededCount"] == 8
-    assert client.get("/questions", headers={"Accept": "application/json"}).json()["data"]["total"] == 8
+    assert reset["seededCount"] == 108
+    assert client.get("/questions", headers={"Accept": "application/json"}).json()["data"]["total"] == 108
 
 
 def test_job_pages_render_review_information(client: TestClient) -> None:

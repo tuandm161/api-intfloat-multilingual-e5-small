@@ -15,6 +15,7 @@ def test_frontend_pages_render_shared_navigation(client: TestClient) -> None:
         "/questions/Q001",
         "/exams",
         "/exams/new",
+        "/documents",
         "/demo-guide",
     ]
 
@@ -24,6 +25,7 @@ def test_frontend_pages_render_shared_navigation(client: TestClient) -> None:
         assert response.status_code == 200
         assert "Ngân hàng câu hỏi" in response.text
         assert "Bộ đề" in response.text
+        assert "Tài liệu" in response.text
         assert "Lịch sử diễn đạt lại" in response.text
         assert "Hướng dẫn demo" in response.text
 

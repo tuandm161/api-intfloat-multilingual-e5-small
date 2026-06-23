@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/documents">Quay lại tài liệu</a>
+<section class="panel">
+  <div class="row">
+    <div><p class="eyebrow">{{ document.id }}</p><h1>{{ document.filename }}</h1></div>
+    <span class="badge {{ document.status|lower }}">{{ document.status|vi_label }}</span>
+  </div>
+  <div class="metadata"><span>{{ document.pageCount }} trang</span><span>{{ document.chunkCount }} chunk</span></div>
+  {% if document.errorMessage %}<p class="error-box">{{ document.errorMessage }}</p>{% endif %}
+  {% if document.status == 'READY' %}
+  <form id="generate-document-form" class="action-form">
+    <label>Số câu mỗi chunk
+      <select name="questionsPerChunk"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
+    </label>
+    <button class="button" type="submit" id="generate-document-button">Tạo câu hỏi từ tài liệu</button>
+  </form>
+  {% endif %}
+</section>
+<section class="panel">
+  <h2>Các phiên tạo câu hỏi</h2>
+  <ul class="clean-list">
+    {% for job in document.questionJobs %}
+      <li><a href="/document-question-jobs/{{ job.id }}">{{ job.id }}</a>: {{ job.status|vi_label }} - {{ job.candidateCount }} câu đề xuất</li>
+    {% else %}
+      <li>Chưa có phiên tạo câu hỏi.</li>
+    {% endfor %}
+  </ul>
+</section>
+<section class="panel">
+  <h2>Chunk đã tách</h2>
+  <div class="chunk-list">
+  {% for chunk in document.chunks %}
+    <article class="chunk-card">
+      <div class="metadata"><span>Chunk {{ chunk.chunkIndex }}</span><span>Trang {{ chunk.pageStart or '-' }}-{{ chunk.pageEnd or '-' }}</span><span>{{ chunk.charCount }} ký tự</span></div>
+      {% if chunk.sectionTitle %}<strong>{{ chunk.sectionTitle }}</strong>{% endif %}
+      <p>{{ chunk.text[:450] }}{% if chunk.text|length > 450 %}...{% endif %}</p>
+    </article>
+  {% else %}
+    <p>Không có chunk nào.</p>
+  {% endfor %}
+  </div>
+</section>
+<script>
+const generateDocumentForm = document.getElementById('generate-document-form');
+if (generateDocumentForm) generateDocumentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = document.getElementById('generate-document-button');
+  button.disabled = true;
+  button.textContent = 'Đang gọi API...';
+  const data = new FormData(generateDocumentForm);
+  try {
+    const response = await fetch('/documents/{{ document.id }}/question-jobs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({questionsPerChunk: Number(data.get('questionsPerChunk'))})
+    });
+    const payload = await response.json();
+    if (!payload.success) throw new Error(payload.error.message);
+    location.href = '/document-question-jobs/' + payload.data.id;
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Tạo câu hỏi từ tài liệu';
+  }
+});
+</script>
+{% endblock %}

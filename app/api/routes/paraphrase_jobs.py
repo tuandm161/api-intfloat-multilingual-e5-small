@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request
 
-from app.api.dependencies import DbSession
+from app.api.dependencies import DbSession, SettingsDependency
 from app.api.templates import templates
 from app.core.responses import success_response
 from app.modules.paraphrase.schemas import ParaphraseJobCreate
@@ -22,8 +22,8 @@ def list_jobs(request: Request, db: DbSession):
 
 
 @router.post("", status_code=201)
-def create_job(payload: ParaphraseJobCreate, db: DbSession) -> dict:
-    return success_response(ParaphraseService(db).create_job(payload))
+def create_job(payload: ParaphraseJobCreate, db: DbSession, settings: SettingsDependency) -> dict:
+    return success_response(ParaphraseService(db, settings).create_job(payload))
 
 
 @router.get("/{job_id}")
@@ -43,5 +43,5 @@ def get_job(job_id: str, request: Request, db: DbSession):
 
 
 @router.post("/{job_id}/retry", status_code=201)
-def retry_job(job_id: str, db: DbSession) -> dict:
-    return success_response(ParaphraseService(db).retry_job(job_id))
+def retry_job(job_id: str, db: DbSession, settings: SettingsDependency) -> dict:
+    return success_response(ParaphraseService(db, settings).retry_job(job_id))

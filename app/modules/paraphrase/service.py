@@ -5,6 +5,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.core.enums import (
     CandidateStatus,
     ErrorCode,
@@ -45,14 +46,16 @@ def candidate_to_dict(candidate: ParaphraseCandidate) -> dict:
 
 
 class ParaphraseService:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, settings: Settings | None = None) -> None:
         self.db = db
+        self.settings = settings
         self.audit = AuditService(db)
 
     def _provider(self, provider: GenerationProvider):
+        if provider is GenerationProvider.api:
+            return ApiParaphraseGenerator(self.settings)
         return {
             GenerationProvider.mock: MockParaphraseGenerator,
-            GenerationProvider.api: ApiParaphraseGenerator,
             GenerationProvider.local: LocalParaphraseGenerator,
         }[provider]()
 

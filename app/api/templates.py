@@ -21,6 +21,8 @@ DISPLAY_LABELS = {
     "VALIDATED": "Đã kiểm định",
     "VALIDATING": "Đang kiểm định",
     "COMPLETED": "Hoàn tất",
+    "READY": "Sẵn sàng",
+    "OCR_REQUIRED": "Cần OCR",
     "basic": "Cơ bản",
     "intermediate": "Trung bình",
     "advanced": "Nâng cao",
@@ -48,6 +50,10 @@ WARNING_LABELS = {
     "TOO_LONG": "Nội dung quá dài.",
     "VECTOR_INDEX_NOT_READY": "Chỉ mục tìm kiếm tương đồng chưa sẵn sàng.",
     "EDITED_REVALIDATION_REQUIRED": "Câu đã được chỉnh sửa và cần kiểm định lại.",
+    "DOCUMENT_SCHEMA_INVALID": "Câu hỏi do tài liệu sinh ra thiếu trường bắt buộc hoặc sai đáp án.",
+    "SOURCE_EXCERPT_MISSING": "Thiếu trích dẫn nguồn từ tài liệu.",
+    "SOURCE_EXCERPT_NOT_FOUND": "Trích dẫn nguồn không khớp rõ với chunk tài liệu.",
+    "DUPLICATE_WITH_DOCUMENT_CANDIDATE": "Có thể trùng với một câu hỏi đề xuất khác trong cùng phiên.",
 }
 
 ERROR_LABELS = {

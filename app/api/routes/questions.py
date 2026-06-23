@@ -56,7 +56,7 @@ def new_question_page(request: Request) -> HTMLResponse:
 
 
 @router.get("/{question_id}")
-def get_question(question_id: str, request: Request, db: DbSession):
+def get_question(question_id: str, request: Request, db: DbSession, settings: SettingsDependency):
     service = QuestionService(db)
     data = service.detail(question_id)
     if wants_html(request):
@@ -68,6 +68,7 @@ def get_question(question_id: str, request: Request, db: DbSession):
                 "active_page": "questions",
                 "question": data,
                 "paraphrases": service.paraphrases(question_id),
+                "generation_provider": settings.generation_provider.value,
             },
         )
     return success_response(data)

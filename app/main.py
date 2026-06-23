@@ -11,6 +11,7 @@ from app.api.routes import (
     candidates,
     config,
     demo,
+    documents,
     embeddings,
     exams,
     exports,
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     application.include_router(questions.router)
     application.include_router(paraphrase_jobs.router)
     application.include_router(candidates.router)
+    application.include_router(documents.router)
     application.include_router(embeddings.router)
     application.include_router(exams.router)
     application.include_router(audit.router)

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">Tài liệu</p><h1>Tạo câu hỏi từ tài liệu</h1></div>
+</div>
+<section class="panel">
+  <h2>Tải tài liệu lên</h2>
+  <p class="form-help">Hỗ trợ PDF có text, DOCX, TXT và MD. PDF scan sẽ được đánh dấu là cần OCR.</p>
+  <form id="upload-form" class="action-form">
+    <label class="full-width">Chọn file
+      <input name="file" type="file" accept=".pdf,.docx,.txt,.md" required>
+    </label>
+    <button class="button" type="submit" id="upload-button">Tải lên và tách chunk</button>
+  </form>
+</section>
+<section class="table-card">
+  <table>
+    <thead><tr><th>Mã</th><th>Tên file</th><th>Trạng thái</th><th>Số trang</th><th>Số chunk</th></tr></thead>
+    <tbody>
+    {% for item in items %}
+      <tr>
+        <td><a href="/documents/{{ item.id }}">{{ item.id }}</a></td>
+        <td>{{ item.filename }}</td>
+        <td><span class="badge {{ item.status|lower }}">{{ item.status|vi_label }}</span></td>
+        <td>{{ item.pageCount }}</td>
+        <td>{{ item.chunkCount }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">Chưa có tài liệu nào.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+<script>
+const uploadForm = document.getElementById('upload-form');
+uploadForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = document.getElementById('upload-button');
+  button.disabled = true;
+  button.textContent = 'Đang xử lý...';
+  try {
+    const response = await fetch('/documents', {method: 'POST', body: new FormData(uploadForm)});
+    const payload = await response.json();
+    if (!payload.success) throw new Error(payload.error.message);
+    location.href = '/documents/' + payload.data.id;
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Tải lên và tách chunk';
+  }
+});
+</script>
+{% endblock %}

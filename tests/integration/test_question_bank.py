@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 def test_seeded_question_bank_and_detail(client: TestClient) -> None:
     listing = client.get("/questions", headers={"Accept": "application/json"}).json()["data"]
     detail = client.get("/questions/Q001", headers={"Accept": "application/json"}).json()["data"]
-    assert listing["total"] == 8
+    assert listing["total"] == 108
     assert detail["correctAnswer"] == "B"
     assert detail["questionType"] == "ORIGINAL"
 
@@ -53,7 +53,7 @@ def test_semantically_duplicate_questions_can_coexist_in_bank(client: TestClient
     assert response.status_code == 201
     assert client.get(
         "/questions", headers={"Accept": "application/json"}
-    ).json()["data"]["total"] == 9
+    ).json()["data"]["total"] == 109
 
 
 def test_semantically_similar_question_is_saved_to_bank(client: TestClient) -> None:
