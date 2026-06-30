@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.enums import (
     CandidateStatus,
     ErrorCode,
@@ -17,20 +17,37 @@ from app.core.errors import AppError
 from app.db.models.paraphrase import ParaphraseCandidate, ParaphraseJob
 from app.modules.audit.service import AuditService
 from app.modules.normalization.text_normalizer import TextNormalizer
-from app.modules.paraphrase.providers.api import ApiParaphraseGenerator
-from app.modules.paraphrase.providers.base import GenerateRequest
-from app.modules.paraphrase.providers.local import LocalParaphraseGenerator
+from app.modules.paraphrase.providers.base import GenerateRequest, GeneratedParaphrase
+from app.modules.paraphrase.providers.local import (
+    DisabledApiParaphraseGenerator,
+    LocalParaphraseGenerator,
+)
 from app.modules.paraphrase.providers.mock import MockParaphraseGenerator
+from app.modules.paraphrase.providers.vietquill import VietQuillParaphraseGenerator
 from app.modules.paraphrase.schemas import ParaphraseJobCreate
 from app.modules.questions.service import QuestionService, question_to_dict
 
 
-def candidate_to_dict(candidate: ParaphraseCandidate) -> dict:
+def candidate_to_dict(candidate: ParaphraseCandidate, source=None) -> dict:
+    option_a = candidate.option_a or (source.option_a if source is not None else None)
+    option_b = candidate.option_b or (source.option_b if source is not None else None)
+    option_c = candidate.option_c or (source.option_c if source is not None else None)
+    option_d = candidate.option_d or (source.option_d if source is not None else None)
     return {
         "id": candidate.id,
         "jobId": candidate.job_id,
         "sourceQuestionId": candidate.source_question_id,
         "candidateStem": candidate.candidate_stem,
+        "optionA": option_a,
+        "optionB": option_b,
+        "optionC": option_c,
+        "optionD": option_d,
+        "options": {
+            "A": option_a,
+            "B": option_b,
+            "C": option_c,
+            "D": option_d,
+        },
         "semanticSimilarityToSource": candidate.semantic_similarity_to_source,
         "lexicalDifferenceFromSource": candidate.lexical_difference_from_source,
         "duplicateMaxSimilarity": candidate.duplicate_max_similarity,
@@ -48,15 +65,19 @@ def candidate_to_dict(candidate: ParaphraseCandidate) -> dict:
 class ParaphraseService:
     def __init__(self, db: Session, settings: Settings | None = None) -> None:
         self.db = db
-        self.settings = settings
+        self.settings = settings or get_settings()
         self.audit = AuditService(db)
 
     def _provider(self, provider: GenerationProvider):
         if provider is GenerationProvider.api:
-            return ApiParaphraseGenerator(self.settings)
+            return DisabledApiParaphraseGenerator()
+        if provider is GenerationProvider.local:
+            engine = self.settings.local_paraphrase_engine.strip().lower()
+            if engine == "vietquill":
+                return VietQuillParaphraseGenerator(self.settings)
+            return LocalParaphraseGenerator(self.settings)
         return {
             GenerationProvider.mock: MockParaphraseGenerator,
-            GenerationProvider.local: LocalParaphraseGenerator,
         }[provider]()
 
     def get_job_or_fail(self, job_id: str) -> ParaphraseJob:
@@ -80,6 +101,7 @@ class ParaphraseService:
         return candidate
 
     def create_job(self, payload: ParaphraseJobCreate) -> dict:
+        provider = payload.provider or self.settings.paraphrase_provider
         source = QuestionService(self.db).get_or_fail(payload.source_question_id)
         if source.status == QuestionStatus.ARCHIVED.value:
             raise AppError(
@@ -93,16 +115,16 @@ class ParaphraseService:
             target_language=(payload.target_language.value if payload.target_language else source.language),
             requested_count=payload.requested_count,
             change_strength=payload.change_strength,
-            provider=payload.provider.value,
+            provider=provider.value,
             status=ParaphraseJobStatus.CREATED.value,
             created_by="demo-user",
         )
         self.db.add(job)
         self.audit.log("ParaphraseJob", job.id, "PARAPHRASE_JOB_CREATED", actor="demo-user")
-        self.db.flush()
+        job.status = ParaphraseJobStatus.GENERATING.value
+        self.db.commit()
         try:
-            job.status = ParaphraseJobStatus.GENERATING.value
-            generated = self._provider(payload.provider).generate_stem_paraphrases(
+            generated = self._provider(provider).generate_paraphrases(
                 GenerateRequest(
                     source=source,
                     requested_count=payload.requested_count,
@@ -113,17 +135,28 @@ class ParaphraseService:
             source_normalized = TextNormalizer.normalize_for_comparison(source.stem)
             seen: set[str] = set()
             candidates = []
-            for stem in generated:
-                display = TextNormalizer.normalize_for_display(stem)
-                normalized = TextNormalizer.normalize_for_comparison(display)
-                if not display or normalized in seen or normalized == source_normalized:
+            for draft in generated:
+                display = _normalize_generated_paraphrase(draft)
+                normalized = TextNormalizer.normalize_for_comparison(display.stem)
+                normalized_full = TextNormalizer.normalize_for_comparison(
+                    _generated_full_text(display)
+                )
+                if (
+                    not display.stem
+                    or normalized_full in seen
+                    or normalized == source_normalized
+                ):
                     continue
-                seen.add(normalized)
+                seen.add(normalized_full)
                 candidate = ParaphraseCandidate(
                     id=f"PC-{uuid4().hex[:8].upper()}",
                     job_id=job.id,
                     source_question_id=source.id,
-                    candidate_stem=display,
+                    candidate_stem=display.stem,
+                    option_a=display.option_a,
+                    option_b=display.option_b,
+                    option_c=display.option_c,
+                    option_d=display.option_d,
                     normalized_candidate_stem=normalized,
                     warnings=[],
                     status=CandidateStatus.GENERATED.value,
@@ -140,6 +173,7 @@ class ParaphraseService:
             self.db.commit()
             return {"jobId": job.id, "status": job.status, "candidateCount": len(candidates)}
         except Exception as exc:
+            self.db.rollback()
             job.status = ParaphraseJobStatus.FAILED.value
             job.error_message = str(exc)
             for candidate in list(job.candidates):
@@ -214,5 +248,27 @@ class ParaphraseService:
             "changeStrength": job.change_strength,
             "provider": job.provider,
             "errorMessage": job.error_message,
-            "candidates": [candidate_to_dict(item) for item in candidates],
+            "candidates": [candidate_to_dict(item, source) for item in candidates],
         }
+
+
+def _normalize_generated_paraphrase(draft: GeneratedParaphrase) -> GeneratedParaphrase:
+    return GeneratedParaphrase(
+        stem=TextNormalizer.normalize_for_display(draft.stem),
+        option_a=TextNormalizer.normalize_for_display(draft.option_a),
+        option_b=TextNormalizer.normalize_for_display(draft.option_b),
+        option_c=TextNormalizer.normalize_for_display(draft.option_c),
+        option_d=TextNormalizer.normalize_for_display(draft.option_d),
+    )
+
+
+def _generated_full_text(draft: GeneratedParaphrase) -> str:
+    return "\n".join(
+        [
+            f"Câu hỏi: {draft.stem}",
+            f"A. {draft.option_a}",
+            f"B. {draft.option_b}",
+            f"C. {draft.option_c}",
+            f"D. {draft.option_d}",
+        ]
+    )

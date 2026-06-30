@@ -28,12 +28,26 @@
   </ul>
 </section>
 <section class="panel">
+  <h2>Cấu trúc tài liệu</h2>
+  <ul class="clean-list">
+    {% for section in document.sections %}
+      <li style="margin-left: {{ (section.level - 1) * 18 }}px">
+        <strong>{{ section.title }}</strong>
+        <span class="metadata"><span>Trang {{ section.pageStart or '-' }}-{{ section.pageEnd or '-' }}</span><span>Độ tin cậy {{ '%.0f'|format((section.confidence or 0) * 100) }}%</span></span>
+      </li>
+    {% else %}
+      <li>Chưa xác định được cấu trúc tài liệu.</li>
+    {% endfor %}
+  </ul>
+</section>
+<section class="panel">
   <h2>Chunk đã tách</h2>
   <div class="chunk-list">
   {% for chunk in document.chunks %}
     <article class="chunk-card">
-      <div class="metadata"><span>Chunk {{ chunk.chunkIndex }}</span><span>Trang {{ chunk.pageStart or '-' }}-{{ chunk.pageEnd or '-' }}</span><span>{{ chunk.charCount }} ký tự</span></div>
-      {% if chunk.sectionTitle %}<strong>{{ chunk.sectionTitle }}</strong>{% endif %}
+      <div class="metadata"><span>Chunk {{ chunk.chunkIndex }}</span><span>{{ chunk.chunkType }}</span><span>Trang {{ chunk.pageStart or '-' }}-{{ chunk.pageEnd or '-' }}</span><span>{{ chunk.tokenCount }} token</span><span>{{ chunk.charCount }} ký tự</span></div>
+      {% if chunk.sectionPath %}<strong>{{ chunk.sectionPath }}</strong>{% elif chunk.sectionTitle %}<strong>{{ chunk.sectionTitle }}</strong>{% endif %}
+      {% if chunk.qualityFlags %}<p class="duplicate-result">{{ chunk.qualityFlags|join(', ') }}</p>{% endif %}
       <p>{{ chunk.text[:450] }}{% if chunk.text|length > 450 %}...{% endif %}</p>
     </article>
   {% else %}

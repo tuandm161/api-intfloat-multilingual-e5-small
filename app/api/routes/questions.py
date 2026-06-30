@@ -68,6 +68,7 @@ def get_question(question_id: str, request: Request, db: DbSession, settings: Se
                 "active_page": "questions",
                 "question": data,
                 "paraphrases": service.paraphrases(question_id),
+                "paraphrase_provider": settings.paraphrase_provider.value,
                 "generation_provider": settings.generation_provider.value,
             },
         )

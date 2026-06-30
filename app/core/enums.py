@@ -41,6 +41,7 @@ class CandidateLabel(StrEnum):
 
 class ParaphraseMode(StrEnum):
     STEM_ONLY = "STEM_ONLY"
+    FULL_QUESTION = "FULL_QUESTION"
 
 
 class Language(StrEnum):

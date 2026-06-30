@@ -4,13 +4,51 @@
 <section class="panel">
   <p class="eyebrow">{{ job.id }}</p>
   <h1>Duyệt câu hỏi từ tài liệu</h1>
-  <div class="metadata"><span>{{ job.status|vi_label }}</span><span>{{ job.candidateCount }} câu đề xuất</span><span>{{ job.model or '-' }}</span></div>
+  <div class="metadata">
+    <span>{{ job.status|vi_label }}</span>
+    <span>{{ job.candidateCount }} câu đề xuất</span>
+    <span>{{ job.model or '-' }}</span>
+    <span>{{ job.promptVersion or '-' }}</span>
+    <span>{{ job.totalTokens or 0 }} tokens</span>
+    <span>{{ job.totalLatencyMs or 0 }} ms</span>
+    <span>${{ '%.6f'|format(job.estimatedCostUsd or 0) }}</span>
+  </div>
   {% if job.errorMessage %}<p class="error-box">{{ job.errorMessage }}</p>{% endif %}
+  {% if job.chunkErrors %}
+  <div class="error-box">
+    <strong>{{ job.failedChunkCount }} chunk lỗi</strong>
+    <ul>
+      {% for error in job.chunkErrors %}
+        <li>Chunk {{ error.chunkIndex }}: {{ error.code }} - {{ error.message }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="actions">
+    <button onclick="retryFailedChunks('{{ job.id }}')">Retry chunk lỗi</button>
+  </div>
+  {% endif %}
+</section>
+<section class="panel">
+  <h2>Knowledge points</h2>
+  <ul class="clean-list">
+    {% for item in job.knowledgePoints %}
+      <li>
+        <strong>{{ item.sourceKey or item.id }}</strong>: {{ item.statement }}
+        <span class="metadata"><span>{{ item.knowledgeType or '-' }}</span><span>{{ item.importance or '-' }}</span></span>
+      </li>
+    {% else %}
+      <li>Chưa lưu knowledge point cho phiên này.</li>
+    {% endfor %}
+  </ul>
 </section>
 <section class="candidate-grid">
 {% for candidate in job.candidates %}
   <article class="panel candidate-card" id="{{ candidate.id }}">
     <div class="row"><span class="badge label-{{ (candidate.label or 'pending')|lower }}">{{ candidate.label|vi_label if candidate.label else 'Chưa đánh giá' }}</span><span class="badge">{{ candidate.status|vi_label }}</span></div>
+    <div class="metadata">
+      <span>Trang {{ candidate.sourcePageStart or '-' }}-{{ candidate.sourcePageEnd or '-' }}</span>
+      <span>{{ candidate.sourceSectionPath or candidate.sourceSectionTitle or 'Chưa rõ section' }}</span>
+    </div>
     <label>Câu hỏi<textarea rows="3" class="candidate-stem">{{ candidate.stem }}</textarea></label>
     <div class="option-fields">
       <label>A<input class="option-a" value="{{ candidate.options.A }}"></label>
@@ -22,8 +60,12 @@
       <label>Đáp án đúng<select class="correct-answer">{% for key in ['A','B','C','D'] %}<option value="{{ key }}" {% if candidate.correctAnswer == key %}selected{% endif %}>{{ key }}</option>{% endfor %}</select></label>
       <label>Độ khó<input class="difficulty" value="{{ candidate.difficulty or '' }}"></label>
       <label>Chủ đề<input class="topic" value="{{ candidate.topic or '' }}"></label>
+      <label>Điểm AI<input value="{{ '%.2f'|format(candidate.qualityScore) if candidate.qualityScore is not none else '-' }}" readonly></label>
       <label class="full-width">Giải thích<textarea rows="2" class="explanation">{{ candidate.explanation or '' }}</textarea></label>
       <label class="full-width">Trích dẫn nguồn<textarea rows="2" class="source-excerpt">{{ candidate.sourceExcerpt or '' }}</textarea></label>
+      {% if candidate.llmValidation and candidate.llmValidation.rationale %}
+      <label class="full-width">Nhận xét AI<textarea rows="2" readonly>{{ candidate.llmValidation.rationale }}</textarea></label>
+      {% endif %}
     </div>
     {% if candidate.duplicateQuestionId %}<p class="duplicate-result">Nghi trùng với {{ candidate.duplicateQuestionId }} - {{ '%.2f'|format((candidate.duplicateMaxSimilarity or 0) * 100) }}%</p>{% endif %}
     <ul class="warnings">{% for warning in candidate.warnings %}<li>{{ warning|vi_warning }}</li>{% else %}<li>Không có cảnh báo.</li>{% endfor %}</ul>
@@ -63,5 +105,6 @@ function candidatePayload(id) {
 async function editDocumentCandidate(id) { try { await api('/document-question-candidates/' + id, {method:'PUT', body:JSON.stringify(candidatePayload(id))}); location.reload(); } catch (e) { alert(e.message); } }
 async function reviewDocumentCandidate(id, action) { const notes = prompt('Nhận xét của người duyệt (không bắt buộc)') || ''; try { await api('/document-question-candidates/' + id + '/' + action, {method:'POST', body:JSON.stringify({reviewerNotes: notes})}); location.reload(); } catch (e) { alert(e.message); } }
 async function saveDocumentCandidate(id) { try { const data = await api('/document-question-candidates/' + id + '/save-as-question', {method:'POST'}); location.href = '/questions/' + data.newQuestionId; } catch (e) { alert(e.message); } }
+async function retryFailedChunks(id) { try { await api('/document-question-jobs/' + id + '/retry-failed-chunks', {method:'POST'}); location.reload(); } catch (e) { alert(e.message); } }
 </script>
 {% endblock %}

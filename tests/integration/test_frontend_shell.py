@@ -30,6 +30,13 @@ def test_frontend_pages_render_shared_navigation(client: TestClient) -> None:
         assert "Hướng dẫn demo" in response.text
 
 
+def test_question_detail_uses_local_paraphrase_provider(client: TestClient) -> None:
+    response = client.get("/questions/Q001", headers={"Accept": "text/html"})
+
+    assert response.status_code == 200
+    assert "provider:'local'" in response.text
+
+
 def test_new_question_page_creates_bank_question_without_duplicate_check(
     client: TestClient,
 ) -> None:

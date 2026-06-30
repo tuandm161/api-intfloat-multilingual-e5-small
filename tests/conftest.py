@@ -5,7 +5,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 os.environ["EMBEDDING_PROVIDER"] = "mock_deterministic"
+os.environ["GENERATION_PROVIDER"] = "mock"
 os.environ["GENERATION_API_KEY"] = ""
+os.environ["PARAPHRASE_PROVIDER"] = "local"
+os.environ["LOCAL_PARAPHRASE_ENGINE"] = "qwen"
 
 from app.main import app
 

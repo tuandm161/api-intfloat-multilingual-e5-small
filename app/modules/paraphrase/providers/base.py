@@ -14,5 +14,14 @@ class GenerateRequest:
     change_strength: str
 
 
+@dataclass
+class GeneratedParaphrase:
+    stem: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+
+
 class ParaphraseGenerator(Protocol):
-    def generate_stem_paraphrases(self, request: GenerateRequest) -> list[str]: ...
+    def generate_paraphrases(self, request: GenerateRequest) -> list[GeneratedParaphrase]: ...

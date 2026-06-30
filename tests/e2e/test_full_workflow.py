@@ -1,11 +1,45 @@
 from fastapi.testclient import TestClient
 
 
+def fake_full_candidate(
+    stem: str,
+    *,
+    option_a: str = "Thực hiện đầy đủ quy trình kỹ thuật trong thời gian quy định.",
+    option_b: str = "Bảo đảm duy trì sự sống của người bệnh ở giai đoạn khẩn cấp.",
+    option_c: str = "Giúp thân nhân người bệnh bớt lo lắng.",
+    option_d: str = "Sàng lọc người bệnh để chuyển khoa sớm hơn.",
+) -> str:
+    return (
+        '{"stem":"'
+        + stem
+        + '","optionA":"'
+        + option_a
+        + '","optionB":"'
+        + option_b
+        + '","optionC":"'
+        + option_c
+        + '","optionD":"'
+        + option_d
+        + '"}'
+    )
+
+
+def fake_candidate_outputs(
+    stem: str,
+    *,
+    option_a: str = "Thực hiện đầy đủ quy trình kỹ thuật trong thời gian quy định.",
+    option_b: str = "Bảo đảm duy trì sự sống của người bệnh ở giai đoạn khẩn cấp.",
+    option_c: str = "Giúp thân nhân người bệnh bớt lo lắng.",
+    option_d: str = "Sàng lọc người bệnh để chuyển khoa sớm hơn.",
+) -> list[str]:
+    return [stem, option_a, option_b, option_c, option_d]
+
+
 def create_and_validate_job(client: TestClient) -> dict:
     created = client.post(
         "/paraphrase-jobs",
         json={
-            "sourceQuestionId": "Q001", "mode": "STEM_ONLY", "requestedCount": 5,
+            "sourceQuestionId": "Q001", "mode": "FULL_QUESTION", "requestedCount": 5,
             "targetLanguage": "vi", "changeStrength": "medium", "provider": "mock",
         },
     )
@@ -21,7 +55,11 @@ def create_and_validate_job(client: TestClient) -> dict:
 def test_full_happy_path_creates_inherited_child_question(client: TestClient) -> None:
     job = create_and_validate_job(client)
     labels = {candidate["label"] for candidate in job["candidates"]}
-    assert {"GOOD", "NEED_REVIEW", "REJECTED"}.issubset(labels)
+    assert "GOOD" in labels
+    assert all(
+        "CONTAINS_ANSWER_HINT" not in candidate["warnings"]
+        for candidate in job["candidates"]
+    )
     good = next(candidate for candidate in job["candidates"] if candidate["label"] == "GOOD")
     assert client.post(
         f"/paraphrase-candidates/{good['id']}/approve",
@@ -34,7 +72,8 @@ def test_full_happy_path_creates_inherited_child_question(client: TestClient) ->
     parent = client.get("/questions/Q001", headers={"Accept": "application/json"}).json()["data"]
     assert child["questionType"] == "PARAPHRASE"
     assert child["parentQuestionId"] == "Q001"
-    assert child["options"] == parent["options"]
+    assert child["options"] == good["options"]
+    assert child["options"] != parent["options"]
     assert child["correctAnswer"] == parent["correctAnswer"]
     assert client.post(f"/paraphrase-candidates/{good['id']}/save-as-question").status_code == 400
     parent_html = client.get("/questions/Q001", headers={"Accept": "text/html"})
@@ -62,6 +101,30 @@ def test_edit_requires_revalidation_and_reject_keeps_notes(client: TestClient) -
     detail = client.get(f"/paraphrase-candidates/{candidate['id']}").json()["data"]
     assert detail["status"] == "REJECTED"
     assert detail["reviewerNotes"] == "Needs a rewrite."
+
+
+def test_validation_rejects_too_little_rewrite(client: TestClient) -> None:
+    created = client.post(
+        "/paraphrase-jobs",
+        json={"sourceQuestionId": "Q001", "requestedCount": 1, "provider": "mock"},
+    )
+    assert created.status_code == 201
+    job_id = created.json()["data"]["jobId"]
+    job = client.get(
+        f"/paraphrase-jobs/{job_id}", headers={"Accept": "application/json"}
+    ).json()["data"]
+    candidate_id = job["candidates"][0]["id"]
+
+    client.put(
+        f"/paraphrase-candidates/{candidate_id}",
+        json={"candidateStem": "Trong chăm sóc cấp tính, ưu tiên ABC nhằm mục đích gì?"},
+    )
+    validated = client.post(f"/paraphrase-candidates/{candidate_id}/validate")
+
+    assert validated.status_code == 200
+    data = validated.json()["data"]
+    assert data["label"] == "REJECTED"
+    assert "TOO_LITTLE_REWRITE" in data["warnings"]
 
 
 def test_paraphrase_validation_does_not_check_question_bank_duplicates(
@@ -103,6 +166,7 @@ def test_job_pages_render_review_information(client: TestClient) -> None:
     )
     assert job["id"] in jobs_page.text
     assert "Tương đồng ngữ nghĩa" in detail_page.text
+    assert "4 đáp án nguồn" in detail_page.text
     assert "Lưu thành câu hỏi" in detail_page.text
     assert "disabled" in detail_page.text
 
@@ -119,8 +183,118 @@ def test_generator_failure_persists_failed_job_and_supports_retry(client: TestCl
     ).json()["data"]
     assert failed["status"] == "FAILED"
     assert failed["candidates"] == []
+    assert "API paraphrase provider is disabled" in failed["errorMessage"]
     retry = client.post(f"/paraphrase-jobs/{job_id}/retry")
     assert retry.status_code == 503
+
+
+def test_local_generator_creates_candidates_with_fake_model(
+    client: TestClient, monkeypatch
+) -> None:
+    class FakeLlama:
+        def __init__(self) -> None:
+            self.contents = (
+                fake_candidate_outputs(
+                    "Vì sao cần ưu tiên đánh giá ABC trước trong chăm sóc cấp tính?"
+                )
+                + fake_candidate_outputs(
+                    "Khi chăm sóc cấp tính, ABC cần được ưu tiên vì lý do gì?"
+                )
+            )
+            self.calls = 0
+
+        def create_chat_completion(self, **kwargs):
+            index = min(self.calls, len(self.contents) - 1)
+            self.calls += 1
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": self.contents[index]
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(
+        "app.modules.paraphrase.providers.local.get_local_llama_model",
+        lambda settings: FakeLlama(),
+    )
+
+    response = client.post(
+        "/paraphrase-jobs",
+        json={
+            "sourceQuestionId": "Q001",
+            "requestedCount": 2,
+            "targetLanguage": "vi",
+            "changeStrength": "medium",
+            "provider": "local",
+        },
+    )
+
+    assert response.status_code == 201
+    data = response.json()["data"]
+    assert data["status"] == "GENERATED"
+    assert data["candidateCount"] == 2
+    detail = client.get(
+        f"/paraphrase-jobs/{data['jobId']}",
+        headers={"Accept": "application/json"},
+    ).json()["data"]
+    assert detail["provider"] == "local"
+    assert [item["candidateStem"] for item in detail["candidates"]] == [
+        "Vì sao cần ưu tiên đánh giá ABC trước trong chăm sóc cấp tính?",
+        "Khi chăm sóc cấp tính, ABC cần được ưu tiên vì lý do gì?",
+    ]
+    assert detail["candidates"][0]["optionB"] == (
+        "Bảo đảm duy trì sự sống của người bệnh ở giai đoạn khẩn cấp."
+    )
+
+
+def test_missing_provider_uses_local_paraphrase_provider(
+    client: TestClient, monkeypatch
+) -> None:
+    class FakeLlama:
+        def __init__(self) -> None:
+            self.contents = fake_candidate_outputs(
+                "Vì sao cần ưu tiên đánh giá ABC trước trong chăm sóc cấp tính?"
+            )
+            self.calls = 0
+
+        def create_chat_completion(self, **kwargs):
+            index = min(self.calls, len(self.contents) - 1)
+            self.calls += 1
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": self.contents[index]
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(
+        "app.modules.paraphrase.providers.local.get_local_llama_model",
+        lambda settings: FakeLlama(),
+    )
+
+    response = client.post(
+        "/paraphrase-jobs",
+        json={
+            "sourceQuestionId": "Q001",
+            "requestedCount": 1,
+            "targetLanguage": "vi",
+            "changeStrength": "medium",
+        },
+    )
+
+    assert response.status_code == 201
+    data = response.json()["data"]
+    detail = client.get(
+        f"/paraphrase-jobs/{data['jobId']}",
+        headers={"Accept": "application/json"},
+    ).json()["data"]
+    assert detail["provider"] == "local"
 
 
 def test_all_required_audit_actions_are_recorded(client: TestClient) -> None:
@@ -135,7 +309,7 @@ def test_all_required_audit_actions_are_recorded(client: TestClient) -> None:
     client.post("/embeddings/reindex")
     job = create_and_validate_job(client)
     good = next(item for item in job["candidates"] if item["label"] == "GOOD")
-    bad = next(item for item in job["candidates"] if item["label"] == "REJECTED")
+    bad = next(item for item in job["candidates"] if item["id"] != good["id"])
     client.put(
         f"/paraphrase-candidates/{good['id']}",
         json={"candidateStem": "Trong cấp cứu, mục tiêu chính của ưu tiên ABC là gì?"},

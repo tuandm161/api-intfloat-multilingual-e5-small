@@ -1,6 +1,7 @@
 """Candidate semantic, lexical, and explainable rule validation."""
 
 from collections import Counter
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,7 +12,7 @@ from app.db.models.paraphrase import ParaphraseCandidate
 from app.modules.audit.service import AuditService
 from app.modules.embeddings.interfaces import cosine_similarity
 from app.modules.embeddings.vector_index import get_embedding_service
-from app.modules.normalization.text_builders import E5InputFormatter
+from app.modules.normalization.text_builders import E5InputFormatter, QuestionTextBuilder
 from app.modules.paraphrase.service import ParaphraseService, candidate_to_dict
 from app.modules.questions.service import QuestionService
 from app.modules.validation.lexical import calculate_lexical_difference
@@ -26,6 +27,7 @@ from app.modules.validation.rules import (
     TOO_SIMILAR_TO_SOURCE,
     changed_to_true_false,
     contains_answer_hint,
+    contains_option_content,
 )
 
 
@@ -52,16 +54,31 @@ class ValidationService:
     def validate_candidate(self, candidate_id: str, *, commit: bool = True) -> dict:
         candidate = self.paraphrases.get_candidate_or_fail(candidate_id)
         source = QuestionService(self.db).get_or_fail(candidate.source_question_id)
-        original_state = candidate_to_dict(candidate)
+        original_state = candidate_to_dict(candidate, source)
         warnings: list[str] = []
 
-        if len(candidate.candidate_stem.strip()) < 15:
+        candidate_question = _candidate_question_like(source, candidate)
+        source_full_text = QuestionTextBuilder.build_full_question_text(source)
+        candidate_full_text = QuestionTextBuilder.build_full_question_text(
+            candidate_question
+        )
+
+        if (
+            len(candidate.candidate_stem.strip()) < 15
+            or not candidate_question.option_a
+            or not candidate_question.option_b
+            or not candidate_question.option_c
+            or not candidate_question.option_d
+        ):
             candidate.label = CandidateLabel.REJECTED.value
             candidate.status = CandidateStatus.VALIDATED.value
             candidate.warnings = [EMPTY_OR_TOO_SHORT]
         else:
-            semantic = self._semantic_similarity(source.stem, candidate.candidate_stem)
+            semantic = self._semantic_similarity(source_full_text, candidate_full_text)
             lexical_difference = calculate_lexical_difference(
+                source_full_text, candidate_full_text
+            )
+            stem_lexical_difference = calculate_lexical_difference(
                 source.stem, candidate.candidate_stem
             )
             candidate.semantic_similarity_to_source = semantic
@@ -81,13 +98,26 @@ class ValidationService:
                 warnings.append(TOO_SIMILAR_TO_SOURCE)
                 if label is CandidateLabel.GOOD:
                     label = CandidateLabel.NEED_REVIEW
-            if lexical_difference <= self.settings.validation_lexical_too_different_min:
+            if (
+                lexical_difference <= self.settings.validation_lexical_too_different_min
+                or stem_lexical_difference
+                <= self.settings.validation_lexical_too_different_min
+            ):
                 warnings.append(TOO_LITTLE_REWRITE)
-                if label is CandidateLabel.GOOD:
-                    label = CandidateLabel.NEED_REVIEW
+                label = CandidateLabel.REJECTED
 
             correct_option = getattr(source, f"option_{source.correct_answer.lower()}")
-            if contains_answer_hint(candidate.candidate_stem, correct_option):
+            option_texts = (
+                source.option_a,
+                source.option_b,
+                source.option_c,
+                source.option_d,
+            )
+            if contains_answer_hint(
+                candidate.candidate_stem, correct_option
+            ) or contains_option_content(
+                candidate.candidate_stem, source.stem, option_texts
+            ):
                 warnings.append(CONTAINS_ANSWER_HINT)
                 if label is CandidateLabel.GOOD:
                     label = CandidateLabel.NEED_REVIEW
@@ -115,11 +145,11 @@ class ValidationService:
             candidate.id,
             "PARAPHRASE_CANDIDATE_VALIDATED",
             before=original_state,
-            after=candidate_to_dict(candidate),
+            after=candidate_to_dict(candidate, source),
         )
         if commit:
             self.db.commit()
-        return candidate_to_dict(candidate)
+        return candidate_to_dict(candidate, source)
 
     def validate_job(self, job_id: str) -> dict:
         job = self.paraphrases.get_job_or_fail(job_id)
@@ -140,3 +170,14 @@ class ValidationService:
                 label.value: summary.get(label.value, 0) for label in CandidateLabel
             },
         }
+
+
+def _candidate_question_like(source, candidate: ParaphraseCandidate):
+    return SimpleNamespace(
+        stem=candidate.candidate_stem,
+        option_a=candidate.option_a or source.option_a,
+        option_b=candidate.option_b or source.option_b,
+        option_c=candidate.option_c or source.option_c,
+        option_d=candidate.option_d or source.option_d,
+        correct_answer=source.correct_answer,
+    )

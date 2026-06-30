@@ -201,9 +201,39 @@ class Document(Base, TimestampMixin):
         cascade="all, delete-orphan",
         order_by="DocumentChunk.chunk_index",
     )
+    sections: Mapped[list[DocumentSection]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentSection.order_index",
+    )
     question_jobs: Mapped[list[DocumentQuestionJob]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
+
+
+class DocumentSection(Base):
+    __tablename__ = "document_sections"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("document_sections.id", ondelete="SET NULL")
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="sections")
+    parent: Mapped[DocumentSection | None] = relationship(remote_side=[id])
 
 
 class DocumentChunk(Base):
@@ -216,26 +246,40 @@ class DocumentChunk(Base):
     document_id: Mapped[str] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    section_id: Mapped[str | None] = mapped_column(
+        ForeignKey("document_sections.id", ondelete="SET NULL"), index=True
+    )
+    parent_chunk_id: Mapped[str | None] = mapped_column(String(64))
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    chunk_type: Mapped[str] = mapped_column(String(32), default="generation", nullable=False)
     page_start: Mapped[int | None] = mapped_column(Integer)
     page_end: Mapped[int | None] = mapped_column(Integer)
     section_title: Mapped[str | None] = mapped_column(String(255))
+    section_path: Mapped[str | None] = mapped_column(String(1000))
     text: Mapped[str] = mapped_column(Text, nullable=False)
     text_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    quality_flags: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    previous_chunk_id: Mapped[str | None] = mapped_column(String(64))
+    next_chunk_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+    section: Mapped[DocumentSection | None] = relationship()
     question_candidates: Mapped[list[DocumentQuestionCandidate]] = relationship(back_populates="chunk")
+    knowledge_points: Mapped[list[DocumentKnowledgePoint]] = relationship(
+        back_populates="chunk", cascade="all, delete-orphan"
+    )
 
 
 class DocumentQuestionJob(Base, TimestampMixin):
     __tablename__ = "document_question_jobs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('CREATED', 'GENERATING', 'GENERATED', 'FAILED')",
+            "status IN ('CREATED', 'GENERATING', 'GENERATED', 'PARTIALLY_COMPLETED', 'FAILED')",
             name="ck_document_question_jobs_status",
         ),
         CheckConstraint("questions_per_chunk BETWEEN 1 AND 5", name="ck_document_question_jobs_qpc"),
@@ -247,10 +291,20 @@ class DocumentQuestionJob(Base, TimestampMixin):
     )
     provider: Mapped[str] = mapped_column(String(32), default="api", nullable=False)
     model: Mapped[str | None] = mapped_column(String(100))
+    prompt_version: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="CREATED", nullable=False, index=True)
     questions_per_chunk: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completed_chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     candidate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    chunk_errors: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    llm_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str | None] = mapped_column(String(100))
 
@@ -258,6 +312,37 @@ class DocumentQuestionJob(Base, TimestampMixin):
     candidates: Mapped[list[DocumentQuestionCandidate]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
+    knowledge_points: Mapped[list[DocumentKnowledgePoint]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+
+class DocumentKnowledgePoint(Base):
+    __tablename__ = "document_knowledge_points"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("document_question_jobs.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    chunk_id: Mapped[str] = mapped_column(
+        ForeignKey("document_chunks.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    source_key: Mapped[str | None] = mapped_column(String(64))
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    knowledge_type: Mapped[str | None] = mapped_column(String(64))
+    importance: Mapped[str | None] = mapped_column(String(32))
+    source_excerpt: Mapped[str | None] = mapped_column(Text)
+    generation_eligible: Mapped[bool] = mapped_column(default=True, nullable=False)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    job: Mapped[DocumentQuestionJob] = relationship(back_populates="knowledge_points")
+    chunk: Mapped[DocumentChunk] = relationship(back_populates="knowledge_points")
 
 
 class DocumentQuestionCandidate(Base, TimestampMixin):
@@ -294,7 +379,10 @@ class DocumentQuestionCandidate(Base, TimestampMixin):
     topic: Mapped[str | None] = mapped_column(String(255))
     difficulty: Mapped[str | None] = mapped_column(String(32))
     source_excerpt: Mapped[str | None] = mapped_column(Text)
+    generation_key: Mapped[str | None] = mapped_column(String(128), index=True)
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    quality_score: Mapped[float | None] = mapped_column(Float)
+    llm_validation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     label: Mapped[str | None] = mapped_column(String(20))
     warnings: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="GENERATED", nullable=False, index=True)

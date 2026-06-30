@@ -26,7 +26,7 @@
 const form = document.getElementById('generate-form');
 if (form) form.addEventListener('submit', async (event) => {
   event.preventDefault(); const data = new FormData(form);
-  const response = await fetch('/paraphrase-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sourceQuestionId:'{{ question.id }}', mode:'STEM_ONLY', requestedCount:Number(data.get('requestedCount')), targetLanguage:'{{ question.language }}', changeStrength:data.get('changeStrength'), provider:'{{ generation_provider or "mock" }}'})});
+  const response = await fetch('/paraphrase-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sourceQuestionId:'{{ question.id }}', mode:'FULL_QUESTION', requestedCount:Number(data.get('requestedCount')), targetLanguage:'{{ question.language }}', changeStrength:data.get('changeStrength'), provider:'{{ paraphrase_provider or "local" }}'})});
   const payload = await response.json(); if (payload.success) location.href='/paraphrase-jobs/'+payload.data.jobId; else alert(payload.error.message);
 });
 </script>

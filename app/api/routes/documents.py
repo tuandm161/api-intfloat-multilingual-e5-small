@@ -98,6 +98,15 @@ def get_document_question_job(job_id: str, request: Request, db: DbSession, sett
     return success_response(data)
 
 
+@router.post("/document-question-jobs/{job_id}/retry-failed-chunks")
+def retry_failed_document_question_chunks(
+    job_id: str,
+    db: DbSession,
+    settings: SettingsDependency,
+) -> dict:
+    return success_response(DocumentService(db, settings).retry_failed_job_chunks(job_id))
+
+
 @router.get("/document-question-candidates/{candidate_id}")
 def get_document_question_candidate(candidate_id: str, db: DbSession, settings: SettingsDependency) -> dict:
     return success_response(

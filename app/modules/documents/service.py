@@ -1,9 +1,11 @@
 """Document ingestion, chunking, generation, and review workflow."""
 
+import hashlib
+import json
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -19,15 +21,19 @@ from app.core.errors import AppError
 from app.db.models.document import (
     Document,
     DocumentChunk,
+    DocumentKnowledgePoint,
+    DocumentSection,
     DocumentQuestionCandidate,
     DocumentQuestionJob,
 )
 from app.db.models.question import Question
 from app.modules.audit.service import AuditService
 from app.modules.documents.extractors import extract_pages
-from app.modules.documents.processing import clean_pages, split_into_chunks
+from app.modules.documents.processing import build_section_tree, clean_pages, split_into_chunks
 from app.modules.documents.providers import (
     DeepSeekDocumentQuestionGenerator,
+    DOCUMENT_GENERATION_PROMPT_VERSION,
+    DocumentQuestionBatch,
     MockDocumentQuestionGenerator,
 )
 from app.modules.documents.schemas import DocumentQuestionCandidateEdit
@@ -46,6 +52,13 @@ DOCUMENT_SCHEMA_INVALID = "DOCUMENT_SCHEMA_INVALID"
 SOURCE_EXCERPT_MISSING = "SOURCE_EXCERPT_MISSING"
 SOURCE_EXCERPT_NOT_FOUND = "SOURCE_EXCERPT_NOT_FOUND"
 DUPLICATE_WITH_DOCUMENT_CANDIDATE = "DUPLICATE_WITH_DOCUMENT_CANDIDATE"
+DOCUMENT_OPTION_DUPLICATE = "DOCUMENT_OPTION_DUPLICATE"
+DOCUMENT_OPTION_INVALID_PATTERN = "DOCUMENT_OPTION_INVALID_PATTERN"
+DOCUMENT_LLM_NOT_ANSWERABLE = "DOCUMENT_LLM_NOT_ANSWERABLE"
+DOCUMENT_LLM_MULTIPLE_ANSWERS = "DOCUMENT_LLM_MULTIPLE_ANSWERS"
+DOCUMENT_LLM_CORRECT_ANSWER_UNSUPPORTED = "DOCUMENT_LLM_CORRECT_ANSWER_UNSUPPORTED"
+DOCUMENT_LLM_LOW_QUALITY = "DOCUMENT_LLM_LOW_QUALITY"
+DOCUMENT_LLM_VALIDATION_FAILED = "DOCUMENT_LLM_VALIDATION_FAILED"
 
 
 def document_to_dict(document: Document, *, include_chunks: bool = False) -> dict:
@@ -61,22 +74,46 @@ def document_to_dict(document: Document, *, include_chunks: bool = False) -> dic
         "updatedAt": document.updated_at,
     }
     if include_chunks:
+        data["sections"] = [section_to_dict(section) for section in document.sections]
         data["chunks"] = [chunk_to_dict(chunk) for chunk in document.chunks]
         data["questionJobs"] = [job_to_dict(job) for job in document.question_jobs]
     return data
+
+
+def section_to_dict(section: DocumentSection) -> dict:
+    return {
+        "id": section.id,
+        "documentId": section.document_id,
+        "parentId": section.parent_id,
+        "title": section.title,
+        "level": section.level,
+        "orderIndex": section.order_index,
+        "pageStart": section.page_start,
+        "pageEnd": section.page_end,
+        "path": section.path,
+        "confidence": section.confidence,
+    }
 
 
 def chunk_to_dict(chunk: DocumentChunk) -> dict:
     return {
         "id": chunk.id,
         "documentId": chunk.document_id,
+        "sectionId": chunk.section_id,
+        "parentChunkId": chunk.parent_chunk_id,
         "chunkIndex": chunk.chunk_index,
+        "chunkType": chunk.chunk_type,
         "pageStart": chunk.page_start,
         "pageEnd": chunk.page_end,
         "sectionTitle": chunk.section_title,
+        "sectionPath": chunk.section_path,
         "text": chunk.text,
         "textHash": chunk.text_hash,
         "charCount": chunk.char_count,
+        "tokenCount": chunk.token_count,
+        "qualityFlags": chunk.quality_flags or [],
+        "previousChunkId": chunk.previous_chunk_id,
+        "nextChunkId": chunk.next_chunk_id,
     }
 
 
@@ -86,17 +123,47 @@ def job_to_dict(job: DocumentQuestionJob, *, include_candidates: bool = False) -
         "documentId": job.document_id,
         "provider": job.provider,
         "model": job.model,
+        "promptVersion": job.prompt_version,
         "status": job.status,
         "questionsPerChunk": job.questions_per_chunk,
         "chunkCount": job.chunk_count,
+        "completedChunkCount": job.completed_chunk_count,
+        "failedChunkCount": job.failed_chunk_count,
+        "chunkErrors": job.chunk_errors or [],
         "candidateCount": job.candidate_count,
+        "llmCallCount": job.llm_call_count,
+        "totalPromptTokens": job.total_prompt_tokens,
+        "totalCompletionTokens": job.total_completion_tokens,
+        "totalTokens": job.total_tokens,
+        "totalLatencyMs": job.total_latency_ms,
+        "estimatedCostUsd": job.estimated_cost_usd,
         "errorMessage": job.error_message,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
     }
     if include_candidates:
+        data["knowledgePoints"] = [
+            knowledge_point_to_dict(item) for item in job.knowledge_points
+        ]
         data["candidates"] = [candidate_to_dict(candidate) for candidate in job.candidates]
     return data
+
+
+def knowledge_point_to_dict(item: DocumentKnowledgePoint) -> dict:
+    return {
+        "id": item.id,
+        "jobId": item.job_id,
+        "documentId": item.document_id,
+        "chunkId": item.chunk_id,
+        "sourceKey": item.source_key,
+        "statement": item.statement,
+        "knowledgeType": item.knowledge_type,
+        "importance": item.importance,
+        "sourceExcerpt": item.source_excerpt,
+        "generationEligible": item.generation_eligible,
+        "rawJson": item.raw_json or {},
+        "createdAt": item.created_at,
+    }
 
 
 def candidate_to_dict(candidate: DocumentQuestionCandidate) -> dict:
@@ -117,6 +184,13 @@ def candidate_to_dict(candidate: DocumentQuestionCandidate) -> dict:
         "topic": candidate.topic,
         "difficulty": candidate.difficulty,
         "sourceExcerpt": candidate.source_excerpt,
+        "sourcePageStart": candidate.chunk.page_start if candidate.chunk else None,
+        "sourcePageEnd": candidate.chunk.page_end if candidate.chunk else None,
+        "sourceSectionTitle": candidate.chunk.section_title if candidate.chunk else None,
+        "sourceSectionPath": candidate.chunk.section_path if candidate.chunk else None,
+        "generationKey": candidate.generation_key,
+        "qualityScore": candidate.quality_score,
+        "llmValidation": candidate.llm_validation,
         "label": candidate.label,
         "warnings": candidate.warnings or [],
         "status": candidate.status,
@@ -164,6 +238,7 @@ class DocumentService:
     def upload_document(self, *, filename: str, content_type: str | None, content: bytes) -> dict:
         pages = extract_pages(filename, content)
         cleaned_pages = clean_pages(pages)
+        section_drafts = build_section_tree(cleaned_pages)
         chunks = split_into_chunks(
             cleaned_pages,
             target_chars=self.settings.document_chunk_target_chars,
@@ -182,20 +257,56 @@ class DocumentService:
         )
         self.db.add(document)
         self.db.flush()
-        for chunk in chunks:
+        section_id_by_index: dict[int, str] = {}
+        section_id_by_title: dict[str, str] = {}
+        section_path_by_title: dict[str, str] = {}
+        for section in section_drafts:
+            section_id = f"SEC-{uuid4().hex[:8].upper()}"
+            section_id_by_index[section.section_index] = section_id
+            section_id_by_title[section.title] = section_id
+            section_path_by_title[section.title] = section.path
             self.db.add(
-                DocumentChunk(
-                    id=f"CH-{uuid4().hex[:8].upper()}",
+                DocumentSection(
+                    id=section_id,
                     document_id=document.id,
-                    chunk_index=chunk.chunk_index,
-                    page_start=chunk.page_start,
-                    page_end=chunk.page_end,
-                    section_title=chunk.section_title,
-                    text=chunk.text,
-                    text_hash=chunk.text_hash,
-                    char_count=len(chunk.text),
+                    parent_id=(
+                        section_id_by_index.get(section.parent_index)
+                        if section.parent_index is not None
+                        else None
+                    ),
+                    title=section.title,
+                    level=section.level,
+                    order_index=section.section_index,
+                    page_start=section.page_start,
+                    page_end=section.page_end,
+                    path=section.path,
+                    confidence=section.confidence,
                 )
             )
+        previous_chunk: DocumentChunk | None = None
+        for chunk in chunks:
+            chunk_model = DocumentChunk(
+                id=f"CH-{uuid4().hex[:8].upper()}",
+                document_id=document.id,
+                section_id=section_id_by_title.get(chunk.section_title or ""),
+                parent_chunk_id=None,
+                chunk_index=chunk.chunk_index,
+                chunk_type="generation",
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+                section_title=chunk.section_title,
+                section_path=chunk.section_path or section_path_by_title.get(chunk.section_title or ""),
+                text=chunk.text,
+                text_hash=chunk.text_hash,
+                char_count=len(chunk.text),
+                token_count=chunk.token_count,
+                quality_flags=chunk.quality_flags,
+                previous_chunk_id=previous_chunk.id if previous_chunk else None,
+            )
+            if previous_chunk:
+                previous_chunk.next_chunk_id = chunk_model.id
+            self.db.add(chunk_model)
+            previous_chunk = chunk_model
         self.audit.log(
             "Document",
             document.id,
@@ -224,6 +335,7 @@ class DocumentService:
                 if self.settings.generation_provider is GenerationProvider.api
                 else "mock-document-generator"
             ),
+            prompt_version=None,
             status="CREATED",
             questions_per_chunk=count,
             chunk_count=len(document.chunks),
@@ -236,40 +348,54 @@ class DocumentService:
             job.status = "GENERATING"
             generator = self._question_generator()
             previous: list[dict[str, Any]] = []
+            chunk_errors: list[dict[str, Any]] = []
             for chunk in document.chunks:
-                raw_questions = generator.generate_questions(
-                    chunk_text=chunk.text,
-                    questions_per_chunk=count,
-                    target_language="vi",
-                )
-                for raw in raw_questions:
-                    candidate = self._candidate_from_raw(job, chunk, raw)
-                    self.db.add(candidate)
-                    self.db.flush()
-                    self._validate_candidate(candidate, chunk, previous)
-                    previous.append(
-                        {
-                            "id": candidate.id,
-                            "stem": candidate.stem,
-                            "vector": self._embed_for_duplicate(candidate.stem) if candidate.stem else None,
-                        }
+                try:
+                    created = self._generate_chunk_candidates(
+                        generator=generator,
+                        job=job,
+                        chunk=chunk,
+                        questions_per_chunk=count,
+                        previous=previous,
                     )
-            job.status = "GENERATED"
-            job.candidate_count = len(job.candidates)
+                    job.completed_chunk_count = (job.completed_chunk_count or 0) + 1
+                    if created == 0:
+                        chunk_errors.append(
+                            self._chunk_error(chunk, "NO_QUESTIONS", "Không sinh được câu hỏi phù hợp")
+                        )
+                        job.failed_chunk_count = (job.failed_chunk_count or 0) + 1
+                except Exception as exc:
+                    chunk_errors.append(self._chunk_error(chunk, type(exc).__name__, str(exc)))
+                    job.failed_chunk_count = (job.failed_chunk_count or 0) + 1
+                    continue
+                finally:
+                    job.chunk_errors = chunk_errors
+                    self.db.flush()
+            job.candidate_count = self._job_candidate_count(job.id)
+            if job.candidate_count == 0 and chunk_errors:
+                raise AppError(
+                    ErrorCode.GENERATION_FAILED,
+                    "Không thể tạo câu hỏi từ bất kỳ chunk nào",
+                    status_code=503,
+                    details={"chunkErrors": chunk_errors},
+                )
+            job.status = "GENERATED" if not chunk_errors else "PARTIALLY_COMPLETED"
             self.audit.log(
                 "DocumentQuestionJob",
                 job.id,
                 "DOCUMENT_QUESTION_CANDIDATES_GENERATED",
                 actor="demo-user",
-                after={"candidateCount": job.candidate_count},
+                after={
+                    "candidateCount": job.candidate_count,
+                    "completedChunkCount": job.completed_chunk_count,
+                    "failedChunkCount": job.failed_chunk_count,
+                },
             )
             self.db.commit()
             return job_to_dict(job, include_candidates=True)
         except Exception as exc:
             job.status = "FAILED"
             job.error_message = str(exc)
-            for candidate in list(job.candidates):
-                self.db.delete(candidate)
             self.db.commit()
             if isinstance(exc, AppError):
                 raise AppError(
@@ -290,6 +416,357 @@ class DocumentService:
             return DeepSeekDocumentQuestionGenerator(self.settings)
         return MockDocumentQuestionGenerator(self.settings)
 
+    def retry_failed_job_chunks(self, job_id: str) -> dict:
+        job = self.get_job_or_fail(job_id)
+        if job.status not in {"FAILED", "PARTIALLY_COMPLETED"}:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "Chỉ có thể retry phiên tạo câu hỏi đang lỗi hoặc hoàn thành một phần",
+                details={"status": job.status},
+            )
+        failed_chunk_ids = {
+            item.get("chunkId") for item in (job.chunk_errors or []) if item.get("chunkId")
+        }
+        if not failed_chunk_ids:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "Phiên tạo câu hỏi không có chunk lỗi để retry",
+            )
+        generator = self._question_generator()
+        previous = self._previous_job_candidates(job)
+        remaining_errors: list[dict[str, Any]] = []
+        job.status = "GENERATING"
+        for chunk in job.document.chunks:
+            if chunk.id not in failed_chunk_ids:
+                continue
+            try:
+                created = self._generate_chunk_candidates(
+                    generator=generator,
+                    job=job,
+                    chunk=chunk,
+                    questions_per_chunk=job.questions_per_chunk,
+                    previous=previous,
+                )
+                if created == 0:
+                    remaining_errors.append(
+                        self._chunk_error(chunk, "NO_QUESTIONS", "Không sinh được câu hỏi phù hợp")
+                    )
+            except Exception as exc:
+                remaining_errors.append(self._chunk_error(chunk, type(exc).__name__, str(exc)))
+        job.chunk_errors = remaining_errors
+        job.failed_chunk_count = len(remaining_errors)
+        job.completed_chunk_count = max(0, job.chunk_count - job.failed_chunk_count)
+        job.candidate_count = self._job_candidate_count(job.id)
+        job.status = "GENERATED" if not remaining_errors else "PARTIALLY_COMPLETED"
+        self.audit.log(
+            "DocumentQuestionJob",
+            job.id,
+            "DOCUMENT_QUESTION_JOB_RETRIED",
+            actor="demo-user",
+            after={
+                "candidateCount": job.candidate_count,
+                "failedChunkCount": job.failed_chunk_count,
+            },
+        )
+        self.db.commit()
+        return job_to_dict(job, include_candidates=True)
+
+    def _generate_chunk_candidates(
+        self,
+        *,
+        generator: Any,
+        job: DocumentQuestionJob,
+        chunk: DocumentChunk,
+        questions_per_chunk: int,
+        previous: list[dict[str, Any]],
+    ) -> int:
+        generation_key = self._generation_key(job, chunk, questions_per_chunk)
+        cached = self._reuse_cached_chunk_candidates(
+            job=job,
+            chunk=chunk,
+            generation_key=generation_key,
+            questions_per_chunk=questions_per_chunk,
+            previous=previous,
+        )
+        if cached >= questions_per_chunk:
+            return cached
+        raw_result = generator.generate_questions(
+            chunk_text=chunk.text,
+            questions_per_chunk=questions_per_chunk,
+            target_language="vi",
+        )
+        batch = self._normalize_question_batch(raw_result, job.model)
+        self._apply_generation_usage(job, batch)
+        self._persist_knowledge_points(job, chunk, batch.knowledge_points)
+        created = 0
+        for raw in batch.questions:
+            candidate = self._candidate_from_raw(job, chunk, raw, generation_key=generation_key)
+            self.db.add(candidate)
+            self.db.flush()
+            self._validate_candidate(candidate, chunk, previous)
+            self._llm_validate_candidate(candidate, chunk, generator, job)
+            previous.append(
+                {
+                    "id": candidate.id,
+                    "stem": candidate.stem,
+                    "vector": self._embed_for_duplicate(candidate.stem) if candidate.stem else None,
+                }
+            )
+            created += 1
+        return created
+
+    def _llm_validate_candidate(
+        self,
+        candidate: DocumentQuestionCandidate,
+        chunk: DocumentChunk,
+        generator: Any,
+        job: DocumentQuestionJob,
+    ) -> None:
+        if candidate.label == CandidateLabel.REJECTED.value:
+            return
+        validate_question = getattr(generator, "validate_question", None)
+        if not callable(validate_question):
+            return
+        try:
+            validation = validate_question(
+                chunk_text=chunk.text,
+                question=self._candidate_validation_payload(candidate),
+                target_language="vi",
+            )
+            self._apply_generation_usage(job, validation)
+            result = validation.result if isinstance(validation.result, dict) else {}
+            candidate.llm_validation = result
+            candidate.quality_score = _coerce_quality_score(result.get("qualityScore"))
+            self._apply_llm_validation_result(candidate, result)
+        except Exception as exc:
+            candidate.llm_validation = {"error": str(exc)[:500]}
+            candidate.warnings = list(
+                dict.fromkeys([*(candidate.warnings or []), DOCUMENT_LLM_VALIDATION_FAILED])
+            )
+            if candidate.label != CandidateLabel.REJECTED.value:
+                candidate.label = CandidateLabel.NEED_REVIEW.value
+                candidate.status = CandidateStatus.NEED_REVIEW.value
+
+    @staticmethod
+    def _candidate_validation_payload(candidate: DocumentQuestionCandidate) -> dict[str, Any]:
+        return {
+            "stem": candidate.stem,
+            "optionA": candidate.option_a,
+            "optionB": candidate.option_b,
+            "optionC": candidate.option_c,
+            "optionD": candidate.option_d,
+            "correctAnswer": candidate.correct_answer,
+            "explanation": candidate.explanation,
+            "sourceExcerpt": candidate.source_excerpt,
+        }
+
+    def _apply_llm_validation_result(
+        self, candidate: DocumentQuestionCandidate, result: dict[str, Any]
+    ) -> None:
+        warnings = list(candidate.warnings or [])
+        severe = False
+        if result.get("answerable") is False:
+            warnings.append(DOCUMENT_LLM_NOT_ANSWERABLE)
+            severe = True
+        if result.get("singleBestAnswer") is False:
+            warnings.append(DOCUMENT_LLM_MULTIPLE_ANSWERS)
+            severe = True
+        if result.get("correctAnswerSupported") is False:
+            warnings.append(DOCUMENT_LLM_CORRECT_ANSWER_UNSUPPORTED)
+            severe = True
+        if candidate.quality_score is not None and candidate.quality_score < 0.55:
+            warnings.append(DOCUMENT_LLM_LOW_QUALITY)
+            severe = True
+        candidate.warnings = list(dict.fromkeys(warnings))
+        if severe:
+            candidate.label = CandidateLabel.REJECTED.value
+            candidate.status = CandidateStatus.VALIDATED.value
+        elif warnings and candidate.label == CandidateLabel.GOOD.value:
+            candidate.label = CandidateLabel.NEED_REVIEW.value
+            candidate.status = CandidateStatus.NEED_REVIEW.value
+
+    def _reuse_cached_chunk_candidates(
+        self,
+        *,
+        job: DocumentQuestionJob,
+        chunk: DocumentChunk,
+        generation_key: str,
+        questions_per_chunk: int,
+        previous: list[dict[str, Any]],
+    ) -> int:
+        cached_items = list(
+            self.db.scalars(
+                select(DocumentQuestionCandidate)
+                .where(
+                    DocumentQuestionCandidate.chunk_id == chunk.id,
+                    DocumentQuestionCandidate.generation_key == generation_key,
+                    DocumentQuestionCandidate.job_id != job.id,
+                )
+                .order_by(DocumentQuestionCandidate.created_at)
+            )
+        )
+        if len(cached_items) < questions_per_chunk:
+            return 0
+        created = 0
+        for cached in cached_items[:questions_per_chunk]:
+            raw = dict(cached.raw_json or {})
+            raw["_cachedFromCandidateId"] = cached.id
+            raw["_cachedFromJobId"] = cached.job_id
+            candidate = self._candidate_from_raw(
+                job,
+                chunk,
+                raw,
+                generation_key=generation_key,
+            )
+            self.db.add(candidate)
+            self.db.flush()
+            self._validate_candidate(candidate, chunk, previous)
+            previous.append(
+                {
+                    "id": candidate.id,
+                    "stem": candidate.stem,
+                    "vector": self._embed_for_duplicate(candidate.stem) if candidate.stem else None,
+                }
+            )
+            created += 1
+        job.prompt_version = job.prompt_version or self._expected_prompt_version(job)
+        return created
+
+    def _persist_knowledge_points(
+        self,
+        job: DocumentQuestionJob,
+        chunk: DocumentChunk,
+        knowledge_points: list[dict[str, Any]],
+    ) -> None:
+        for index, raw in enumerate(knowledge_points, start=1):
+            if not isinstance(raw, dict):
+                continue
+            statement = TextNormalizer.normalize_for_display(str(raw.get("statement") or ""))
+            if not statement:
+                continue
+            self.db.add(
+                DocumentKnowledgePoint(
+                    id=f"KP-{uuid4().hex[:8].upper()}",
+                    job_id=job.id,
+                    document_id=job.document_id,
+                    chunk_id=chunk.id,
+                    source_key=TextNormalizer.normalize_for_display(
+                        str(raw.get("id") or f"KP{index}")
+                    )[:64],
+                    statement=statement,
+                    knowledge_type=TextNormalizer.normalize_for_display(
+                        str(raw.get("type") or raw.get("knowledgeType") or "")
+                    )
+                    or None,
+                    importance=TextNormalizer.normalize_for_display(
+                        str(raw.get("importance") or "")
+                    )
+                    or None,
+                    source_excerpt=TextNormalizer.normalize_for_display(
+                        str(raw.get("sourceExcerpt") or "")
+                    )
+                    or None,
+                    generation_eligible=bool(raw.get("generationEligible", True)),
+                    raw_json=raw,
+                )
+            )
+
+    def _generation_key(
+        self,
+        job: DocumentQuestionJob,
+        chunk: DocumentChunk,
+        questions_per_chunk: int,
+    ) -> str:
+        payload = {
+            "provider": job.provider,
+            "model": job.model,
+            "promptVersion": self._expected_prompt_version(job),
+            "questionsPerChunk": questions_per_chunk,
+            "chunkHash": chunk.text_hash,
+            "targetLanguage": "vi",
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _expected_prompt_version(job: DocumentQuestionJob) -> str:
+        if job.provider == GenerationProvider.api.value:
+            return DOCUMENT_GENERATION_PROMPT_VERSION
+        return "mock-document-generator-v1"
+
+    @staticmethod
+    def _chunk_error(chunk: DocumentChunk, code: str, message: str) -> dict[str, Any]:
+        return {
+            "chunkId": chunk.id,
+            "chunkIndex": chunk.chunk_index,
+            "pageStart": chunk.page_start,
+            "pageEnd": chunk.page_end,
+            "code": code,
+            "message": message[:500],
+        }
+
+    def _previous_job_candidates(self, job: DocumentQuestionJob) -> list[dict[str, Any]]:
+        return [
+            {"id": item.id, "stem": item.stem, "vector": self._embed_for_duplicate(item.stem)}
+            for item in job.candidates
+            if item.stem
+        ]
+
+    def _job_candidate_count(self, job_id: str) -> int:
+        return int(
+            self.db.scalar(
+                select(func.count()).select_from(DocumentQuestionCandidate).where(
+                    DocumentQuestionCandidate.job_id == job_id
+                )
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _normalize_question_batch(raw_result: Any, fallback_model: str | None) -> DocumentQuestionBatch:
+        if isinstance(raw_result, DocumentQuestionBatch):
+            return raw_result
+        if isinstance(raw_result, list):
+            from app.modules.documents.providers import DocumentGenerationUsage
+
+            return DocumentQuestionBatch(
+                questions=[item for item in raw_result if isinstance(item, dict)],
+                model=fallback_model or "unknown",
+                usage=DocumentGenerationUsage(),
+                knowledge_points=[],
+            )
+        raise AppError(
+            ErrorCode.GENERATION_FAILED,
+            "Document generator returned an unsupported result",
+            status_code=503,
+            details={"type": type(raw_result).__name__},
+        )
+
+    def _apply_generation_usage(self, job: DocumentQuestionJob, batch: DocumentQuestionBatch) -> None:
+        job.model = batch.model or job.model
+        job.prompt_version = batch.prompt_version or job.prompt_version
+        job.llm_call_count = (job.llm_call_count or 0) + batch.usage.call_count
+        job.total_prompt_tokens = (job.total_prompt_tokens or 0) + batch.usage.prompt_tokens
+        job.total_completion_tokens = (
+            (job.total_completion_tokens or 0) + batch.usage.completion_tokens
+        )
+        job.total_tokens = (job.total_tokens or 0) + batch.usage.total_tokens
+        job.total_latency_ms = (job.total_latency_ms or 0) + batch.usage.latency_ms
+        job.estimated_cost_usd = round(
+            (job.estimated_cost_usd or 0.0)
+            + (
+                batch.usage.prompt_tokens
+                * self.settings.generation_prompt_usd_per_1m_tokens
+                / 1_000_000
+            )
+            + (
+                batch.usage.completion_tokens
+                * self.settings.generation_completion_usd_per_1m_tokens
+                / 1_000_000
+            ),
+            8,
+        )
+
     def edit_candidate(self, candidate_id: str, payload: DocumentQuestionCandidateEdit) -> dict:
         candidate = self.get_candidate_or_fail(candidate_id)
         if candidate.status == CandidateStatus.SAVED.value:
@@ -305,6 +782,8 @@ class DocumentService:
         candidate.duplicate_max_similarity = None
         candidate.duplicate_question_id = None
         candidate.duplicate_question_stem_snapshot = None
+        candidate.quality_score = None
+        candidate.llm_validation = None
         self._validate_candidate(candidate, candidate.chunk, self._previous_candidates(candidate))
         self.audit.log(
             "DocumentQuestionCandidate",
@@ -409,6 +888,8 @@ class DocumentService:
         job: DocumentQuestionJob,
         chunk: DocumentChunk,
         raw: dict[str, Any],
+        *,
+        generation_key: str | None = None,
     ) -> DocumentQuestionCandidate:
         return DocumentQuestionCandidate(
             id=f"DQC-{uuid4().hex[:8].upper()}",
@@ -425,6 +906,7 @@ class DocumentService:
             topic=TextNormalizer.normalize_for_display(str(raw.get("topic") or "")) or None,
             difficulty=TextNormalizer.normalize_for_display(str(raw.get("difficulty") or "medium")) or "medium",
             source_excerpt=TextNormalizer.normalize_for_display(str(raw.get("sourceExcerpt") or "")) or None,
+            generation_key=generation_key,
             raw_json=raw,
         )
 
@@ -448,6 +930,23 @@ class DocumentService:
         ):
             warnings.append(DOCUMENT_SCHEMA_INVALID)
             fatal = True
+
+        if not fatal:
+            option_values = [
+                candidate.option_a,
+                candidate.option_b,
+                candidate.option_c,
+                candidate.option_d,
+            ]
+            normalized_options = [
+                TextNormalizer.normalize_for_comparison(value) for value in option_values
+            ]
+            if len(set(normalized_options)) < 4:
+                warnings.append(DOCUMENT_OPTION_DUPLICATE)
+                fatal = True
+            if any(_has_invalid_option_pattern(value) for value in option_values):
+                warnings.append(DOCUMENT_OPTION_INVALID_PATTERN)
+                fatal = True
 
         if not candidate.source_excerpt:
             warnings.append(SOURCE_EXCERPT_MISSING)
@@ -581,3 +1080,37 @@ class DocumentService:
         chunk_tokens = tokenize(chunk_text)
         coverage = len(excerpt_tokens & chunk_tokens) / len(excerpt_tokens)
         return coverage >= 0.6
+
+
+def _has_invalid_option_pattern(text: str) -> bool:
+    normalized = TextNormalizer.normalize_for_comparison(text)
+    raw = text.casefold()
+    invalid_phrases = (
+        "tất cả đều đúng",
+        "tất cả các đáp án",
+        "tất cả đáp án",
+        "cả a và b",
+        "cả b và c",
+        "cả a b và c",
+        "không có đáp án nào",
+        "đáp án trên đều",
+        "tat ca deu dung",
+        "tat ca cac dap an",
+        "tat ca dap an",
+        "ca a va b",
+        "ca b va c",
+        "ca a b va c",
+        "khong co dap an nao",
+        "dap an tren deu",
+    )
+    if any(phrase in raw for phrase in invalid_phrases):
+        return True
+    return any(phrase in normalized for phrase in invalid_phrases)
+
+
+def _coerce_quality_score(value: Any) -> float | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    return min(1.0, max(0.0, score))

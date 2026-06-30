@@ -123,21 +123,47 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE INDEX IF NOT EXISTS ix_documents_status ON documents(status);
 
+CREATE TABLE IF NOT EXISTS document_sections (
+  id VARCHAR(64) PRIMARY KEY,
+  document_id VARCHAR(64) NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  parent_id VARCHAR(64) REFERENCES document_sections(id) ON DELETE SET NULL,
+  title VARCHAR(255) NOT NULL,
+  level INTEGER NOT NULL DEFAULT 1,
+  order_index INTEGER NOT NULL,
+  page_start INTEGER,
+  page_end INTEGER,
+  path VARCHAR(1000) NOT NULL,
+  confidence DOUBLE PRECISION,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_document_sections_document_id ON document_sections(document_id);
+CREATE INDEX IF NOT EXISTS ix_document_sections_order_index ON document_sections(order_index);
+
 CREATE TABLE IF NOT EXISTS document_chunks (
   id VARCHAR(64) PRIMARY KEY,
   document_id VARCHAR(64) NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  section_id VARCHAR(64) REFERENCES document_sections(id) ON DELETE SET NULL,
+  parent_chunk_id VARCHAR(64),
   chunk_index INTEGER NOT NULL,
+  chunk_type VARCHAR(32) NOT NULL DEFAULT 'generation',
   page_start INTEGER,
   page_end INTEGER,
   section_title VARCHAR(255),
+  section_path VARCHAR(1000),
   text TEXT NOT NULL,
   text_hash VARCHAR(64) NOT NULL,
   char_count INTEGER NOT NULL,
+  token_count INTEGER NOT NULL DEFAULT 0,
+  quality_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  previous_chunk_id VARCHAR(64),
+  next_chunk_id VARCHAR(64),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_document_chunks_position UNIQUE (document_id, chunk_index)
 );
 
 CREATE INDEX IF NOT EXISTS ix_document_chunks_document_id ON document_chunks(document_id);
+CREATE INDEX IF NOT EXISTS ix_document_chunks_section_id ON document_chunks(section_id);
 CREATE INDEX IF NOT EXISTS ix_document_chunks_chunk_index ON document_chunks(chunk_index);
 CREATE INDEX IF NOT EXISTS ix_document_chunks_text_hash ON document_chunks(text_hash);
 
@@ -146,22 +172,51 @@ CREATE TABLE IF NOT EXISTS document_question_jobs (
   document_id VARCHAR(64) NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   provider VARCHAR(32) NOT NULL DEFAULT 'api',
   model VARCHAR(100),
+  prompt_version VARCHAR(64),
   status VARCHAR(32) NOT NULL DEFAULT 'CREATED',
   questions_per_chunk INTEGER NOT NULL DEFAULT 3,
   chunk_count INTEGER NOT NULL DEFAULT 0,
+  completed_chunk_count INTEGER NOT NULL DEFAULT 0,
+  failed_chunk_count INTEGER NOT NULL DEFAULT 0,
   candidate_count INTEGER NOT NULL DEFAULT 0,
+  chunk_errors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  llm_call_count INTEGER NOT NULL DEFAULT 0,
+  total_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  total_completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  total_latency_ms INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
   error_message TEXT,
   created_by VARCHAR(100),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_document_question_jobs_status CHECK (
-    status IN ('CREATED', 'GENERATING', 'GENERATED', 'FAILED')
+    status IN ('CREATED', 'GENERATING', 'GENERATED', 'PARTIALLY_COMPLETED', 'FAILED')
   ),
   CONSTRAINT ck_document_question_jobs_qpc CHECK (questions_per_chunk BETWEEN 1 AND 5)
 );
 
 CREATE INDEX IF NOT EXISTS ix_document_question_jobs_document_id ON document_question_jobs(document_id);
 CREATE INDEX IF NOT EXISTS ix_document_question_jobs_status ON document_question_jobs(status);
+
+CREATE TABLE IF NOT EXISTS document_knowledge_points (
+  id VARCHAR(64) PRIMARY KEY,
+  job_id VARCHAR(64) NOT NULL REFERENCES document_question_jobs(id) ON DELETE CASCADE,
+  document_id VARCHAR(64) NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  chunk_id VARCHAR(64) NOT NULL REFERENCES document_chunks(id) ON DELETE CASCADE,
+  source_key VARCHAR(64),
+  statement TEXT NOT NULL,
+  knowledge_type VARCHAR(64),
+  importance VARCHAR(32),
+  source_excerpt TEXT,
+  generation_eligible BOOLEAN NOT NULL DEFAULT true,
+  raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_document_knowledge_points_job_id ON document_knowledge_points(job_id);
+CREATE INDEX IF NOT EXISTS ix_document_knowledge_points_document_id ON document_knowledge_points(document_id);
+CREATE INDEX IF NOT EXISTS ix_document_knowledge_points_chunk_id ON document_knowledge_points(chunk_id);
 
 CREATE TABLE IF NOT EXISTS document_question_candidates (
   id VARCHAR(64) PRIMARY KEY,
@@ -178,7 +233,10 @@ CREATE TABLE IF NOT EXISTS document_question_candidates (
   topic VARCHAR(255),
   difficulty VARCHAR(32),
   source_excerpt TEXT,
+  generation_key VARCHAR(128),
   raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  quality_score DOUBLE PRECISION,
+  llm_validation JSONB,
   label VARCHAR(20),
   warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
   status VARCHAR(20) NOT NULL DEFAULT 'GENERATED',
@@ -202,6 +260,7 @@ CREATE INDEX IF NOT EXISTS ix_document_candidates_job_id ON document_question_ca
 CREATE INDEX IF NOT EXISTS ix_document_candidates_document_id ON document_question_candidates(document_id);
 CREATE INDEX IF NOT EXISTS ix_document_candidates_chunk_id ON document_question_candidates(chunk_id);
 CREATE INDEX IF NOT EXISTS ix_document_candidates_status ON document_question_candidates(status);
+CREATE INDEX IF NOT EXISTS ix_document_candidates_generation_key ON document_question_candidates(generation_key);
 CREATE INDEX IF NOT EXISTS ix_document_candidates_saved_question_id ON document_question_candidates(saved_question_id);
 
 CREATE TABLE IF NOT EXISTS exams (

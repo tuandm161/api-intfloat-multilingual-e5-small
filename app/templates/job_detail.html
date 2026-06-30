@@ -4,14 +4,26 @@
 <section class="panel"><p class="eyebrow">{{ job.id }}</p><h1>Đánh giá câu diễn đạt lại</h1>
   <div class="metadata"><span>Nhà cung cấp: {{ job.provider|vi_label }}</span><span>Trạng thái: {{ job.status|vi_label }}</span><span>Số lượng yêu cầu: {{ job.requestedCount }}</span></div>
   {% if job.errorMessage %}<p class="error-box">{{ job.errorMessage|vi_error }}</p><button class="button" onclick="retryJob()">Thử lại</button>{% endif %}
-  <h2>Câu nguồn</h2><p>{{ job.sourceQuestion.stem }}</p>
+  <h2>Câu hỏi nguồn</h2><p>{{ job.sourceQuestion.stem }}</p>
+  <h2>4 đáp án nguồn</h2>
+  <div class="options">
+    {% for key, value in job.sourceQuestion.options.items() %}
+      <div class="option {% if key == job.sourceQuestion.correctAnswer %}correct{% endif %}"><strong>{{ key }}.</strong> {{ value }}</div>
+    {% endfor %}
+  </div>
   {% if job.status == 'GENERATED' %}<button class="button" onclick="validateJob()">Kiểm định các câu</button>{% endif %}
 </section>
 <section class="candidate-grid">
 {% for candidate in job.candidates %}
   <article class="panel candidate-card" id="{{ candidate.id }}">
     <div class="row"><span class="badge label-{{ (candidate.label or 'pending')|lower }}">{{ candidate.label|vi_label if candidate.label else 'Chưa đánh giá' }}</span><span class="badge">{{ candidate.status|vi_label }}</span></div>
-    <textarea rows="3" class="candidate-text">{{ candidate.candidateStem }}</textarea>
+    <label>Câu hỏi<textarea rows="3" class="candidate-text">{{ candidate.candidateStem }}</textarea></label>
+    <div class="options candidate-options">
+      <label>A<textarea rows="2" class="candidate-option option-a">{{ candidate.optionA or candidate.options.A }}</textarea></label>
+      <label>B<textarea rows="2" class="candidate-option option-b">{{ candidate.optionB or candidate.options.B }}</textarea></label>
+      <label>C<textarea rows="2" class="candidate-option option-c">{{ candidate.optionC or candidate.options.C }}</textarea></label>
+      <label>D<textarea rows="2" class="candidate-option option-d">{{ candidate.optionD or candidate.options.D }}</textarea></label>
+    </div>
     <dl class="scores"><div><dt>Tương đồng ngữ nghĩa</dt><dd>{{ '%.3f'|format(candidate.semanticSimilarityToSource) if candidate.semanticSimilarityToSource is not none else '-' }}</dd></div><div><dt>Khác biệt từ vựng</dt><dd>{{ '%.3f'|format(candidate.lexicalDifferenceFromSource) if candidate.lexicalDifferenceFromSource is not none else '-' }}</dd></div></dl>
     <ul class="warnings">{% for warning in candidate.warnings %}<li>{{ warning|vi_warning }}</li>{% else %}<li>Không có cảnh báo.</li>{% endfor %}</ul>
     {% if candidate.reviewerNotes %}<p><strong>Nhận xét của người duyệt:</strong> {{ candidate.reviewerNotes }}</p>{% endif %}
@@ -30,7 +42,7 @@ async function api(url, options={}) { const response=await fetch(url,{headers:{'
 async function validateJob(){try{await api('/paraphrase-jobs/{{ job.id }}/validate',{method:'POST'});location.reload()}catch(e){alert(e.message)}}
 async function retryJob(){try{const data=await api('/paraphrase-jobs/{{ job.id }}/retry',{method:'POST'});location.href='/paraphrase-jobs/'+data.jobId}catch(e){alert(e.message)}}
 async function validateCandidate(id){try{await api('/paraphrase-candidates/'+id+'/validate',{method:'POST'});location.reload()}catch(e){alert(e.message)}}
-async function editCandidate(id){const text=document.querySelector('#'+id+' .candidate-text').value;try{await api('/paraphrase-candidates/'+id,{method:'PUT',body:JSON.stringify({candidateStem:text})});location.reload()}catch(e){alert(e.message)}}
+async function editCandidate(id){const root=document.querySelector('#'+id);try{await api('/paraphrase-candidates/'+id,{method:'PUT',body:JSON.stringify({candidateStem:root.querySelector('.candidate-text').value,optionA:root.querySelector('.option-a').value,optionB:root.querySelector('.option-b').value,optionC:root.querySelector('.option-c').value,optionD:root.querySelector('.option-d').value})});location.reload()}catch(e){alert(e.message)}}
 async function review(id,action){const notes=prompt('Nhận xét của người duyệt (không bắt buộc)')||'';try{await api('/paraphrase-candidates/'+id+'/'+action,{method:'POST',body:JSON.stringify({reviewerNotes:notes})});location.reload()}catch(e){alert(e.message)}}
 async function saveCandidate(id){try{const data=await api('/paraphrase-candidates/'+id+'/save-as-question',{method:'POST'});location.href='/questions/'+data.newQuestionId}catch(e){alert(e.message)}}
 </script>

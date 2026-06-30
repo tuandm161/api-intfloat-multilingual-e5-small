@@ -22,6 +22,7 @@ def test_public_config_does_not_expose_secrets(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert payload["data"] == {
+        "paraphraseProvider": "local",
         "generationProvider": "mock",
         "embeddingModelName": "intfloat/multilingual-e5-small",
         "embeddingProvider": "mock_deterministic",
@@ -31,6 +32,8 @@ def test_public_config_does_not_expose_secrets(client: TestClient) -> None:
     assert "api_key" not in serialized_payload
     assert "apikey" not in serialized_payload
     assert "generation_api_key" not in serialized_payload
+    assert "local_paraphrase_model" not in serialized_payload
+    assert "qwen" not in serialized_payload
 
 
 def test_unknown_route_uses_standard_error_contract(client: TestClient) -> None:

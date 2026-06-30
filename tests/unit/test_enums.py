@@ -39,6 +39,9 @@ def test_shared_enum_values_match_contract() -> None:
         "NEED_REVIEW",
         "REJECTED",
     ]
-    assert ParaphraseMode.STEM_ONLY.value == "STEM_ONLY"
+    assert [item.value for item in ParaphraseMode] == [
+        "STEM_ONLY",
+        "FULL_QUESTION",
+    ]
     assert [item.value for item in Language] == ["vi", "en", "bilingual"]
     assert [item.value for item in GenerationProvider] == ["mock", "api", "local"]

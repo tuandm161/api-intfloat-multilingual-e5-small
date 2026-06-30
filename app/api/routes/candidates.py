@@ -26,9 +26,10 @@ def validate_job(job_id: str, db: DbSession, settings: SettingsDependency) -> di
 
 @router.get("/paraphrase-candidates/{candidate_id}")
 def get_candidate(candidate_id: str, db: DbSession) -> dict:
-    return success_response(
-        candidate_to_dict(ParaphraseService(db).get_candidate_or_fail(candidate_id))
-    )
+    service = ParaphraseService(db)
+    candidate = service.get_candidate_or_fail(candidate_id)
+    source = QuestionService(db).get_or_fail(candidate.source_question_id)
+    return success_response(candidate_to_dict(candidate, source))
 
 
 @router.post("/paraphrase-candidates/{candidate_id}/validate")
@@ -44,13 +45,22 @@ def validate_candidate(
 def edit_candidate(candidate_id: str, payload: CandidateEdit, db: DbSession) -> dict:
     service = ParaphraseService(db)
     candidate = service.get_candidate_or_fail(candidate_id)
+    source = QuestionService(db).get_or_fail(candidate.source_question_id)
     if candidate.status == CandidateStatus.SAVED.value:
         raise AppError(ErrorCode.VALIDATION_ERROR, "Không thể chỉnh sửa câu đã được lưu")
-    before = candidate_to_dict(candidate)
+    before = candidate_to_dict(candidate, source)
     candidate.candidate_stem = TextNormalizer.normalize_for_display(payload.candidateStem)
     candidate.normalized_candidate_stem = TextNormalizer.normalize_for_comparison(
         payload.candidateStem
     )
+    if payload.option_a is not None:
+        candidate.option_a = TextNormalizer.normalize_for_display(payload.option_a)
+    if payload.option_b is not None:
+        candidate.option_b = TextNormalizer.normalize_for_display(payload.option_b)
+    if payload.option_c is not None:
+        candidate.option_c = TextNormalizer.normalize_for_display(payload.option_c)
+    if payload.option_d is not None:
+        candidate.option_d = TextNormalizer.normalize_for_display(payload.option_d)
     candidate.semantic_similarity_to_source = None
     candidate.lexical_difference_from_source = None
     candidate.duplicate_max_similarity = None
@@ -65,15 +75,16 @@ def edit_candidate(candidate_id: str, payload: CandidateEdit, db: DbSession) -> 
         "PARAPHRASE_CANDIDATE_EDITED",
         actor="demo-user",
         before=before,
-        after=candidate_to_dict(candidate),
+        after=candidate_to_dict(candidate, source),
     )
     db.commit()
-    return success_response(candidate_to_dict(candidate))
+    return success_response(candidate_to_dict(candidate, source))
 
 
 @router.post("/paraphrase-candidates/{candidate_id}/approve")
 def approve_candidate(candidate_id: str, payload: ReviewRequest, db: DbSession) -> dict:
     candidate = ParaphraseService(db).get_candidate_or_fail(candidate_id)
+    source = QuestionService(db).get_or_fail(candidate.source_question_id)
     if candidate.status not in {
         CandidateStatus.VALIDATED.value,
         CandidateStatus.NEED_REVIEW.value,
@@ -82,7 +93,7 @@ def approve_candidate(candidate_id: str, payload: ReviewRequest, db: DbSession) 
             ErrorCode.VALIDATION_ERROR,
             "Câu diễn đạt lại phải được kiểm định trước khi duyệt",
         )
-    before = candidate_to_dict(candidate)
+    before = candidate_to_dict(candidate, source)
     candidate.status = CandidateStatus.APPROVED.value
     candidate.reviewer_notes = payload.reviewerNotes
     AuditService(db).log(
@@ -91,7 +102,7 @@ def approve_candidate(candidate_id: str, payload: ReviewRequest, db: DbSession) 
         "PARAPHRASE_CANDIDATE_APPROVED",
         actor="demo-user",
         before=before,
-        after=candidate_to_dict(candidate),
+        after=candidate_to_dict(candidate, source),
     )
     db.commit()
     return success_response({"candidateId": candidate.id, "status": candidate.status})
@@ -100,9 +111,10 @@ def approve_candidate(candidate_id: str, payload: ReviewRequest, db: DbSession) 
 @router.post("/paraphrase-candidates/{candidate_id}/reject")
 def reject_candidate(candidate_id: str, payload: ReviewRequest, db: DbSession) -> dict:
     candidate = ParaphraseService(db).get_candidate_or_fail(candidate_id)
+    source = QuestionService(db).get_or_fail(candidate.source_question_id)
     if candidate.status == CandidateStatus.SAVED.value:
         raise AppError(ErrorCode.VALIDATION_ERROR, "Không thể từ chối câu đã được lưu")
-    before = candidate_to_dict(candidate)
+    before = candidate_to_dict(candidate, source)
     candidate.status = CandidateStatus.REJECTED.value
     candidate.reviewer_notes = payload.reviewerNotes
     AuditService(db).log(
@@ -111,7 +123,7 @@ def reject_candidate(candidate_id: str, payload: ReviewRequest, db: DbSession) -
         "PARAPHRASE_CANDIDATE_REJECTED",
         actor="demo-user",
         before=before,
-        after=candidate_to_dict(candidate),
+        after=candidate_to_dict(candidate, source),
     )
     db.commit()
     return success_response({"candidateId": candidate.id, "status": candidate.status})
@@ -138,10 +150,10 @@ def save_as_question(
     question = Question(
         id=new_id,
         stem=candidate.candidate_stem,
-        option_a=source.option_a,
-        option_b=source.option_b,
-        option_c=source.option_c,
-        option_d=source.option_d,
+        option_a=candidate.option_a or source.option_a,
+        option_b=candidate.option_b or source.option_b,
+        option_c=candidate.option_c or source.option_c,
+        option_d=candidate.option_d or source.option_d,
         correct_answer=source.correct_answer,
         explanation=source.explanation,
         topic=source.topic,

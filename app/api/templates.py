@@ -54,6 +54,13 @@ WARNING_LABELS = {
     "SOURCE_EXCERPT_MISSING": "Thiếu trích dẫn nguồn từ tài liệu.",
     "SOURCE_EXCERPT_NOT_FOUND": "Trích dẫn nguồn không khớp rõ với chunk tài liệu.",
     "DUPLICATE_WITH_DOCUMENT_CANDIDATE": "Có thể trùng với một câu hỏi đề xuất khác trong cùng phiên.",
+    "DOCUMENT_OPTION_DUPLICATE": "Các phương án trả lời bị trùng nhau.",
+    "DOCUMENT_OPTION_INVALID_PATTERN": "Phương án trả lời dùng mẫu không phù hợp như 'tất cả đều đúng' hoặc gộp nhiều đáp án.",
+    "DOCUMENT_LLM_NOT_ANSWERABLE": "Bộ kiểm định AI đánh giá câu hỏi chưa trả lời được từ nguồn.",
+    "DOCUMENT_LLM_MULTIPLE_ANSWERS": "Bộ kiểm định AI đánh giá có thể có nhiều hơn một đáp án đúng.",
+    "DOCUMENT_LLM_CORRECT_ANSWER_UNSUPPORTED": "Bộ kiểm định AI đánh giá đáp án đúng chưa được nguồn hỗ trợ rõ.",
+    "DOCUMENT_LLM_LOW_QUALITY": "Bộ kiểm định AI đánh giá chất lượng câu hỏi thấp.",
+    "DOCUMENT_LLM_VALIDATION_FAILED": "Không chạy được bước kiểm định AI bổ sung.",
 }
 
 ERROR_LABELS = {
